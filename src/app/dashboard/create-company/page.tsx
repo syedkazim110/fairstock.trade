@@ -24,6 +24,15 @@ interface CompanyFormData {
   business_structure: string
 }
 
+interface TreasuryFormData {
+  total_shares: number
+  par_value: number
+  issued_shares: number
+  option_pool_shares: number
+  option_pool_percentage: number
+  option_pool_type: 'number' | 'percentage'
+}
+
 interface Member {
   name: string
   email: string
@@ -62,6 +71,15 @@ export default function CreateCompanyPage() {
   const [members, setMembers] = useState<Member[]>([
     { name: '', email: '', position: 'CEO' }
   ])
+  
+  const [treasuryData, setTreasuryData] = useState<TreasuryFormData>({
+    total_shares: 0,
+    par_value: 0.01,
+    issued_shares: 0,
+    option_pool_shares: 0,
+    option_pool_percentage: 0,
+    option_pool_type: 'percentage'
+  })
   
   // Dropdown data
   const [countries, setCountries] = useState<Country[]>([])
@@ -185,13 +203,48 @@ export default function CreateCompanyPage() {
       })
     }
     
+    if (step === 3) {
+      if (!treasuryData.total_shares || treasuryData.total_shares <= 0) {
+        newErrors.total_shares = 'Total shares must be greater than 0'
+      }
+      if (!treasuryData.par_value || treasuryData.par_value <= 0) {
+        newErrors.par_value = 'Par value must be greater than 0'
+      }
+      if (treasuryData.issued_shares < 0) {
+        newErrors.issued_shares = 'Issued shares cannot be negative'
+      }
+      if (treasuryData.issued_shares > treasuryData.total_shares) {
+        newErrors.issued_shares = 'Issued shares cannot exceed total shares'
+      }
+      
+      // Validate option pool
+      if (treasuryData.option_pool_type === 'number') {
+        if (treasuryData.option_pool_shares < 0) {
+          newErrors.option_pool = 'Option pool shares cannot be negative'
+        }
+      } else {
+        if (treasuryData.option_pool_percentage < 0 || treasuryData.option_pool_percentage > 100) {
+          newErrors.option_pool = 'Option pool percentage must be between 0 and 100'
+        }
+      }
+      
+      // Validate total allocation doesn't exceed total shares
+      const optionPoolShares = treasuryData.option_pool_type === 'percentage' 
+        ? Math.floor((treasuryData.option_pool_percentage / 100) * treasuryData.total_shares)
+        : treasuryData.option_pool_shares;
+      
+      if (treasuryData.issued_shares + optionPoolShares > treasuryData.total_shares) {
+        newErrors.option_pool = 'Total issued shares and option pool cannot exceed total shares'
+      }
+    }
+    
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
   }
 
   const nextStep = () => {
     if (validateStep(currentStep)) {
-      setCurrentStep(prev => Math.min(prev + 1, 3))
+      setCurrentStep(prev => Math.min(prev + 1, 4))
     }
   }
 
@@ -216,15 +269,22 @@ export default function CreateCompanyPage() {
   }
 
   const submitForm = async () => {
-    if (!validateStep(2)) return
+    if (!validateStep(3)) return
     
     setLoading(true)
     const supabase = createClient()
     
     try {
+      // Calculate option pool shares for storage
+      const optionPoolShares = treasuryData.option_pool_type === 'percentage' 
+        ? Math.floor((treasuryData.option_pool_percentage / 100) * treasuryData.total_shares)
+        : treasuryData.option_pool_shares;
+
       // Log the data being sent for debugging
       const companyPayload = {
         ...companyData,
+        ...treasuryData,
+        option_pool_shares: optionPoolShares, // Store calculated shares
         created_by: user.id
       }
       console.log('Creating company with data:', companyPayload)
@@ -303,7 +363,7 @@ export default function CreateCompanyPage() {
   }
 
   const getProgressPercentage = () => {
-    return Math.round((currentStep / 3) * 100)
+    return Math.round((currentStep / 4) * 100)
   }
 
   return (
@@ -324,7 +384,7 @@ export default function CreateCompanyPage() {
               <h1 className="text-xl font-semibold text-gray-900">Create New Company</h1>
             </div>
             <div className="text-sm text-gray-500">
-              Step {currentStep} of 3 • {getProgressPercentage()}% Complete
+              Step {currentStep} of 4 • {getProgressPercentage()}% Complete
             </div>
           </div>
         </div>
@@ -335,7 +395,7 @@ export default function CreateCompanyPage() {
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="py-4">
             <div className="flex items-center">
-              {[1, 2, 3].map((step) => (
+              {[1, 2, 3, 4].map((step) => (
                 <div key={step} className="flex items-center">
                   <div className={`flex items-center justify-center w-8 h-8 rounded-full border-2 ${
                     step <= currentStep 
@@ -356,10 +416,11 @@ export default function CreateCompanyPage() {
                     }`}>
                       {step === 1 && 'Company Details'}
                       {step === 2 && 'Add Members'}
-                      {step === 3 && 'Review & Submit'}
+                      {step === 3 && 'Treasury & Shares'}
+                      {step === 4 && 'Review & Submit'}
                     </div>
                   </div>
-                  {step < 3 && (
+                  {step < 4 && (
                     <div className={`flex-1 mx-4 h-0.5 ${
                       step < currentStep ? 'bg-indigo-600' : 'bg-gray-300'
                     }`} />
@@ -583,8 +644,186 @@ export default function CreateCompanyPage() {
             </div>
           )}
 
-          {/* Step 3: Review & Submit */}
+          {/* Step 3: Treasury & Shares */}
           {currentStep === 3 && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-lg font-medium text-gray-900 mb-4">Treasury & Shares</h2>
+                
+                <div className="grid grid-cols-1 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Total Shares *
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={treasuryData.total_shares || ''}
+                        onChange={(e) => setTreasuryData(prev => ({ ...prev, total_shares: parseInt(e.target.value) || 0 }))}
+                        className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 ${
+                          errors.total_shares ? 'border-red-300' : 'border-gray-300'
+                        }`}
+                        placeholder="Enter total authorized shares"
+                      />
+                      {treasuryData.total_shares > 0 && treasuryData.par_value > 0 && (
+                        <p className="mt-1 text-sm text-gray-600">
+                          Total Value: ${(treasuryData.total_shares * treasuryData.par_value).toLocaleString()}
+                        </p>
+                      )}
+                      {errors.total_shares && <p className="mt-1 text-sm text-red-600">{errors.total_shares}</p>}
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Par Value *
+                      </label>
+                      <input
+                        type="number"
+                        min="0.0001"
+                        step="0.0001"
+                        value={treasuryData.par_value || ''}
+                        onChange={(e) => setTreasuryData(prev => ({ ...prev, par_value: parseFloat(e.target.value) || 0 }))}
+                        className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 ${
+                          errors.par_value ? 'border-red-300' : 'border-gray-300'
+                        }`}
+                        placeholder="0.01"
+                      />
+                      {treasuryData.total_shares > 0 && treasuryData.par_value > 0 && (
+                        <p className="mt-1 text-sm text-gray-600">
+                          Total Value: ${(treasuryData.total_shares * treasuryData.par_value).toLocaleString()}
+                        </p>
+                      )}
+                      {errors.par_value && <p className="mt-1 text-sm text-red-600">{errors.par_value}</p>}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Issued Shares *
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max={treasuryData.total_shares}
+                      value={treasuryData.issued_shares || ''}
+                      onChange={(e) => setTreasuryData(prev => ({ ...prev, issued_shares: parseInt(e.target.value) || 0 }))}
+                      className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 ${
+                        errors.issued_shares ? 'border-red-300' : 'border-gray-300'
+                      }`}
+                      placeholder="Enter shares to be issued to owner"
+                    />
+                    {treasuryData.issued_shares > 0 && treasuryData.par_value > 0 && (
+                      <p className="mt-1 text-sm text-gray-600">
+                        Value: ${(treasuryData.issued_shares * treasuryData.par_value).toLocaleString()}
+                      </p>
+                    )}
+                    {errors.issued_shares && <p className="mt-1 text-sm text-red-600">{errors.issued_shares}</p>}
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-sm font-medium text-gray-700">
+                        Option Pool *
+                      </label>
+                      <div className="flex items-center space-x-2">
+                        <button
+                          type="button"
+                          onClick={() => setTreasuryData(prev => ({ ...prev, option_pool_type: 'number' }))}
+                          className={`px-3 py-1 text-xs rounded ${
+                            treasuryData.option_pool_type === 'number'
+                              ? 'bg-indigo-600 text-white'
+                              : 'bg-gray-200 text-gray-700'
+                          }`}
+                        >
+                          Number
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTreasuryData(prev => ({ ...prev, option_pool_type: 'percentage' }))}
+                          className={`px-3 py-1 text-xs rounded ${
+                            treasuryData.option_pool_type === 'percentage'
+                              ? 'bg-indigo-600 text-white'
+                              : 'bg-gray-200 text-gray-700'
+                          }`}
+                        >
+                          Percentage
+                        </button>
+                      </div>
+                    </div>
+                    
+                    {treasuryData.option_pool_type === 'number' ? (
+                      <div>
+                        <input
+                          type="number"
+                          min="0"
+                          value={treasuryData.option_pool_shares || ''}
+                          onChange={(e) => setTreasuryData(prev => ({ ...prev, option_pool_shares: parseInt(e.target.value) || 0 }))}
+                          className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 ${
+                            errors.option_pool_shares ? 'border-red-300' : 'border-gray-300'
+                          }`}
+                          placeholder="Enter number of shares for option pool"
+                        />
+                        {treasuryData.option_pool_shares > 0 && treasuryData.par_value > 0 && (
+                          <p className="mt-1 text-sm text-gray-600">
+                            Value: ${(treasuryData.option_pool_shares * treasuryData.par_value).toLocaleString()}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <div>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.1"
+                          value={treasuryData.option_pool_percentage || ''}
+                          onChange={(e) => setTreasuryData(prev => ({ ...prev, option_pool_percentage: parseFloat(e.target.value) || 0 }))}
+                          className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 ${
+                            errors.option_pool_percentage ? 'border-red-300' : 'border-gray-300'
+                          }`}
+                          placeholder="Enter percentage for option pool"
+                        />
+                        {treasuryData.option_pool_percentage > 0 && treasuryData.total_shares > 0 && (
+                          <div className="mt-1 text-sm text-gray-600">
+                            <p>Shares: {Math.floor((treasuryData.option_pool_percentage / 100) * treasuryData.total_shares).toLocaleString()}</p>
+                            {treasuryData.par_value > 0 && (
+                              <p>Value: ${(Math.floor((treasuryData.option_pool_percentage / 100) * treasuryData.total_shares) * treasuryData.par_value).toLocaleString()}</p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {errors.option_pool && <p className="mt-1 text-sm text-red-600">{errors.option_pool}</p>}
+                  </div>
+
+                  {/* Unissued Shares (Calculated) */}
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <h3 className="text-md font-medium text-gray-700 mb-2">Unissued Shares</h3>
+                    <div className="text-sm text-gray-600">
+                      {(() => {
+                        const optionPoolShares = treasuryData.option_pool_type === 'percentage' 
+                          ? Math.floor((treasuryData.option_pool_percentage / 100) * treasuryData.total_shares)
+                          : treasuryData.option_pool_shares;
+                        const unissuedShares = treasuryData.total_shares - treasuryData.issued_shares - optionPoolShares;
+                        return (
+                          <div>
+                            <p className="font-medium">Shares: {unissuedShares.toLocaleString()}</p>
+                            {treasuryData.par_value > 0 && (
+                              <p>Value: ${(unissuedShares * treasuryData.par_value).toLocaleString()}</p>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Step 4: Review & Submit */}
+          {currentStep === 4 && (
             <div className="space-y-6">
               <div>
                 <h2 className="text-lg font-medium text-gray-900 mb-6">Review Your Information</h2>
@@ -623,7 +862,7 @@ export default function CreateCompanyPage() {
                 </div>
 
                 {/* Members Summary */}
-                <div className="bg-gray-50 rounded-lg p-4">
+                <div className="bg-gray-50 rounded-lg p-4 mb-6">
                   <div className="flex justify-between items-center mb-3">
                     <h3 className="text-md font-medium text-gray-700">Company Members ({members.length})</h3>
                     <button
@@ -648,6 +887,49 @@ export default function CreateCompanyPage() {
                   </div>
                 </div>
 
+                {/* Treasury & Shares Summary */}
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <div className="flex justify-between items-center mb-3">
+                    <h3 className="text-md font-medium text-gray-700">Treasury & Shares</h3>
+                    <button
+                      onClick={() => setCurrentStep(3)}
+                      className="text-indigo-600 hover:text-indigo-800 text-sm"
+                    >
+                      Edit
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <span className="font-medium text-gray-600">Total Shares:</span> {treasuryData.total_shares.toLocaleString()}
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-600">Par Value:</span> ${treasuryData.par_value}
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-600">Issued Shares:</span> {treasuryData.issued_shares.toLocaleString()}
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-600">Option Pool:</span>{' '}
+                      {treasuryData.option_pool_type === 'percentage' 
+                        ? `${treasuryData.option_pool_percentage}% (${Math.floor((treasuryData.option_pool_percentage / 100) * treasuryData.total_shares).toLocaleString()} shares)`
+                        : `${treasuryData.option_pool_shares.toLocaleString()} shares`
+                      }
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-600">Unissued Shares:</span>{' '}
+                      {(() => {
+                        const optionPoolShares = treasuryData.option_pool_type === 'percentage' 
+                          ? Math.floor((treasuryData.option_pool_percentage / 100) * treasuryData.total_shares)
+                          : treasuryData.option_pool_shares;
+                        return (treasuryData.total_shares - treasuryData.issued_shares - optionPoolShares).toLocaleString();
+                      })()}
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-600">Total Value:</span> ${(treasuryData.total_shares * treasuryData.par_value).toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+
                 {errors.submit && (
                   <div className="bg-red-50 border border-red-200 rounded-md p-4">
                     <p className="text-sm text-red-600">{errors.submit}</p>
@@ -667,7 +949,7 @@ export default function CreateCompanyPage() {
               Previous
             </button>
             
-            {currentStep < 3 ? (
+            {currentStep < 4 ? (
               <button
                 onClick={nextStep}
                 className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md hover:bg-indigo-700"
