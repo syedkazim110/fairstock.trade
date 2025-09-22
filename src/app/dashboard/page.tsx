@@ -137,13 +137,13 @@ export default async function DashboardPage() {
               </p>
               
               <div className="flex justify-center space-x-4">
-                <div className="bg-white bg-opacity-20 rounded-lg px-4 py-2">
+                <div className="bg-black bg-opacity-20 rounded-lg px-4 py-2">
                   <span className="text-sm font-semibold">🚀 Fast Trading</span>
                 </div>
-                <div className="bg-white bg-opacity-20 rounded-lg px-4 py-2">
+                <div className="bg-black bg-opacity-20 rounded-lg px-4 py-2">
                   <span className="text-sm font-semibold">🔒 Secure Platform</span>
                 </div>
-                <div className="bg-white bg-opacity-20 rounded-lg px-4 py-2">
+                <div className="bg-black bg-opacity-20 rounded-lg px-4 py-2">
                   <span className="text-sm font-semibold">📈 Real-time Auctions</span>
                 </div>
               </div>
