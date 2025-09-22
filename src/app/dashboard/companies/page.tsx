@@ -1,0 +1,368 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+import { createClient } from '@/lib/supabase/client'
+import { useRouter, useSearchParams } from 'next/navigation'
+
+interface Company {
+  id: string
+  name: string
+  address: string
+  country_code: string
+  state_code: string
+  business_structure: string
+  created_at: string
+  created_by: string
+}
+
+interface CompanyMember {
+  id: string
+  name: string
+  email: string
+  position: string
+  company_id: string
+}
+
+interface CountryState {
+  countries: { code: string; name: string }[]
+  states: { code: string; name: string; country_code: string }[]
+}
+
+const BUSINESS_STRUCTURES = [
+  { value: 'sole_proprietorship', label: 'Sole Proprietorship' },
+  { value: 'gp', label: 'GP (General Partnership)' },
+  { value: 'lp', label: 'LP (Limited Partnership)' },
+  { value: 'llp', label: 'LLP (Limited Liability Partnership)' },
+  { value: 'llc', label: 'LLC (Limited Liability Company)' },
+  { value: 'c_corp', label: 'C-Corp (C Corporation)' },
+  { value: 's_corp', label: 'S-Corp (S Corporation)' },
+  { value: 'nonprofit', label: 'Nonprofit' },
+  { value: 'other', label: 'Other'}
+]
+
+export default function CompaniesPage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const [companies, setCompanies] = useState<Company[]>([])
+  const [loading, setLoading] = useState(true)
+  const [user, setUser] = useState<any>(null)
+  const [showSuccess, setShowSuccess] = useState(false)
+  const [countryStateData, setCountryStateData] = useState<CountryState>({
+    countries: [],
+    states: []
+  })
+
+  useEffect(() => {
+    loadData()
+    
+    // Check for success parameter
+    if (searchParams.get('success') === 'company-created') {
+      setShowSuccess(true)
+      // Clear the URL parameter after showing success
+      const url = new URL(window.location.href)
+      url.searchParams.delete('success')
+      window.history.replaceState({}, '', url.toString())
+      
+      // Hide success message after 5 seconds
+      setTimeout(() => setShowSuccess(false), 5000)
+    }
+  }, [searchParams])
+
+  const loadData = async () => {
+    const supabase = createClient()
+    
+    try {
+      // Get current user
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        router.push('/auth/login')
+        return
+      }
+      setUser(user)
+
+      // Load countries and states for display
+      const [countriesRes, statesRes] = await Promise.all([
+        supabase.from('countries').select('code, name').order('name'),
+        supabase.from('states').select('code, name, country_code').order('name')
+      ])
+      
+      if (countriesRes.data && statesRes.data) {
+        setCountryStateData({
+          countries: countriesRes.data,
+          states: statesRes.data
+        })
+      }
+
+      // First, get companies where user is the creator
+      const { data: ownedCompanies, error: ownedError } = await supabase
+        .from('companies')
+        .select(`
+          id,
+          name,
+          address,
+          country_code,
+          state_code,
+          business_structure,
+          created_at,
+          created_by,
+          company_members (
+            id,
+            name,
+            email,
+            position
+          )
+        `)
+        .eq('created_by', user.id)
+        .order('created_at', { ascending: false })
+
+      // Then, get companies where user is a member
+      const { data: memberCompanies, error: memberError } = await supabase
+        .from('companies')
+        .select(`
+          id,
+          name,
+          address,
+          country_code,
+          state_code,
+          business_structure,
+          created_at,
+          created_by,
+          company_members!inner (
+            id,
+            name,
+            email,
+            position
+          )
+        `)
+        .eq('company_members.email', user.email)
+        .neq('created_by', user.id) // Exclude companies where user is already the creator
+        .order('created_at', { ascending: false })
+
+      let companiesData: any[] = []
+      let error = null
+
+      if (ownedError) {
+        console.error('Error fetching owned companies:', ownedError)
+        error = ownedError
+      } else if (memberError) {
+        console.error('Error fetching member companies:', memberError)
+        error = memberError
+      } else {
+        // Combine both arrays and remove duplicates
+        const allCompanies = [...(ownedCompanies || []), ...(memberCompanies || [])]
+        const uniqueCompanies = allCompanies.filter((company, index, self) => 
+          index === self.findIndex(c => c.id === company.id)
+        )
+        companiesData = uniqueCompanies.sort((a, b) => 
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        )
+      }
+
+      if (error) {
+        console.error('Error fetching companies:', error)
+      } else {
+        setCompanies(companiesData || [])
+      }
+    } catch (error) {
+      console.error('Error loading data:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const getCountryName = (countryCode: string) => {
+    return countryStateData.countries.find(c => c.code === countryCode)?.name || countryCode
+  }
+
+  const getStateName = (stateCode: string) => {
+    return countryStateData.states.find(s => s.code === stateCode)?.name || stateCode
+  }
+
+  const getBusinessStructureLabel = (value: string) => {
+    return BUSINESS_STRUCTURES.find(bs => bs.value === value)?.label || value
+  }
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    })
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        {/* Navigation */}
+        <nav className="bg-white shadow">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex justify-between h-16">
+              <div className="flex items-center">
+                <button
+                  onClick={() => router.push('/dashboard')}
+                  className="mr-4 text-gray-400 hover:text-gray-600"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                </button>
+                <h1 className="text-xl font-semibold text-gray-900">My Companies</h1>
+              </div>
+            </div>
+          </div>
+        </nav>
+
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="flex justify-center items-center h-64">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Navigation */}
+      <nav className="bg-white shadow">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between h-16">
+            <div className="flex items-center">
+              <button
+                onClick={() => router.push('/dashboard')}
+                className="mr-4 text-gray-400 hover:text-gray-600"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+              <h1 className="text-xl font-semibold text-gray-900">My Companies</h1>
+            </div>
+            <div className="flex items-center">
+              <button
+                onClick={() => router.push('/dashboard/create-company')}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium"
+              >
+                Create New Company
+              </button>
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      {/* Success Message */}
+      {showSuccess && (
+        <div className="bg-green-50 border-l-4 border-green-400 p-4 mx-4 mt-4 rounded-md">
+          <div className="flex">
+            <div className="flex-shrink-0">
+              <svg className="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+              </svg>
+            </div>
+            <div className="ml-3">
+              <p className="text-sm text-green-700">
+                Company created successfully! You can now manage your company and start auctions.
+              </p>
+            </div>
+            <div className="ml-auto pl-3">
+              <div className="-mx-1.5 -my-1.5">
+                <button
+                  onClick={() => setShowSuccess(false)}
+                  className="inline-flex bg-green-50 rounded-md p-1.5 text-green-500 hover:bg-green-100"
+                >
+                  <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {companies.length === 0 ? (
+          // Empty state
+          <div className="text-center py-12">
+            <div className="mx-auto flex items-center justify-center h-24 w-24 rounded-full bg-gray-100 mb-6">
+              <svg className="h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-4m-5 0H9m0 0H5m0 0h2M7 7h10M7 11h10M7 15h10" />
+              </svg>
+            </div>
+            <h3 className="text-lg font-medium text-gray-900 mb-2">No companies yet</h3>
+            <p className="text-gray-600 mb-6">
+              Get started by creating your first company to begin trading on FairStock.
+            </p>
+            <button
+              onClick={() => router.push('/dashboard/create-company')}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-md text-sm font-medium"
+            >
+              Create Your First Company
+            </button>
+          </div>
+        ) : (
+          // Companies list
+          <div>
+            <div className="mb-6">
+              <h2 className="text-2xl font-bold text-gray-900">Your Companies ({companies.length})</h2>
+              <p className="text-gray-600 mt-1">Manage your companies and track their auction activities.</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {companies.map((company) => (
+                <div key={company.id} className="bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow p-6">
+                  <div className="flex items-start justify-between mb-4">
+                    <div className="flex-1">
+                      <h3 className="text-lg font-semibold text-gray-900 mb-1">{company.name}</h3>
+                      <p className="text-sm text-gray-600">{getBusinessStructureLabel(company.business_structure)}</p>
+                    </div>
+                    <div className="flex-shrink-0">
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                        company.created_by === user?.id 
+                          ? 'bg-green-100 text-green-800' 
+                          : 'bg-blue-100 text-blue-800'
+                      }`}>
+                        {company.created_by === user?.id ? 'Owner' : 'Member'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 mb-4">
+                    <div className="text-sm">
+                      <span className="font-medium text-gray-700">Location:</span>
+                      <span className="text-gray-600 ml-1">
+                        {getStateName(company.state_code)}, {getCountryName(company.country_code)}
+                      </span>
+                    </div>
+                    <div className="text-sm">
+                      <span className="font-medium text-gray-700">Created:</span>
+                      <span className="text-gray-600 ml-1">{formatDate(company.created_at)}</span>
+                    </div>
+                  </div>
+
+                  <div className="border-t pt-4">
+                    <div className="flex justify-between items-center">
+                      <div className="text-sm text-gray-600">
+                        {(company as any).company_members?.length || 0} member(s)
+                      </div>
+                      <div className="flex space-x-2">
+                        <button className="text-indigo-600 hover:text-indigo-800 text-sm font-medium">
+                          View Details
+                        </button>
+                        {company.created_by === user?.id && (
+                          <button className="text-gray-600 hover:text-gray-800 text-sm font-medium">
+                            Manage
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

@@ -91,12 +91,12 @@ export default async function DashboardPage() {
               </div>
 
               {/* Create Company Quick Action */}
-              <button className="w-full flex items-center px-4 py-3 text-sm font-medium text-green-700 rounded-lg hover:bg-green-50 group">
+              <a href="/dashboard/create-company" className="w-full flex items-center px-4 py-3 text-sm font-medium text-green-700 rounded-lg hover:bg-green-50 group">
                 <svg className="mr-3 h-5 w-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                 </svg>
                 Create Company
-              </button>
+              </a>
 
               {/* Start Auction Quick Action */}
               <button className="w-full flex items-center px-4 py-3 text-sm font-medium text-blue-700 rounded-lg hover:bg-blue-50 group">
@@ -163,9 +163,9 @@ export default async function DashboardPage() {
                 <p className="text-gray-600 mb-6">
                   Start fresh by creating a new company profile to begin their auction journey with FairStock.
                 </p>
-                <button className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg transition-colors">
+                <a href="/dashboard/create-company" className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg transition-colors inline-block text-center">
                   Create New Company
-                </button>
+                </a>
               </div>
             </div>
 
