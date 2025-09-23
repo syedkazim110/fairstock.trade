@@ -2,6 +2,10 @@
 
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import AddMemberModal from './AddMemberModal'
+import EditMemberModal from './EditMemberModal'
+import DeleteConfirmationDialog from './DeleteConfirmationDialog'
+import Notification from './Notification'
 
 interface CapTableMember {
   id: string
@@ -13,14 +17,37 @@ interface CapTableMember {
   share_percentage: number
 }
 
+interface CompanyData {
+  total_shares: number | null
+  issued_shares: number | null
+}
+
 interface CapTableTabProps {
   companyId: string
 }
 
 export default function CapTableTab({ companyId }: CapTableTabProps) {
   const [members, setMembers] = useState<CapTableMember[]>([])
+  const [companyData, setCompanyData] = useState<CompanyData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  
+  // Modal states
+  const [showAddModal, setShowAddModal] = useState(false)
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [selectedMember, setSelectedMember] = useState<CapTableMember | null>(null)
+  
+  // Notification state
+  const [notification, setNotification] = useState<{
+    type: 'success' | 'error' | 'info'
+    message: string
+    isVisible: boolean
+  }>({
+    type: 'success',
+    message: '',
+    isVisible: false
+  })
 
   useEffect(() => {
     if (companyId) {
@@ -34,10 +61,25 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
     const supabase = createClient()
     
     try {
-      // First, get company members
+      // First, get company data including share information
+      const { data: company, error: companyError } = await supabase
+        .from('companies')
+        .select('total_shares, issued_shares')
+        .eq('id', companyId)
+        .single()
+
+      if (companyError) {
+        console.error('Error fetching company data:', companyError)
+        setError('Failed to load company data')
+        return
+      }
+
+      setCompanyData(company)
+
+      // Get company members with credit balance
       const { data: membersData, error: membersError } = await supabase
         .from('company_members')
-        .select('id, name, email, position')
+        .select('id, name, email, position, credit_balance')
         .eq('company_id', companyId)
         .order('name')
 
@@ -52,29 +94,8 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
         return
       }
 
-      // Get user IDs for the member emails
-      const memberEmails = membersData.map(member => member.email)
-      const { data: usersData, error: usersError } = await supabase
-        .from('profiles')
-        .select('id, email')
-        .in('email', memberEmails)
-
-      if (usersError) {
-        console.error('Error fetching user profiles:', usersError)
-      }
-
-      // Get wallet balances for these users
-      const userIds = usersData?.map(user => user.id) || []
-      const { data: walletsData, error: walletsError } = await supabase
-        .from('user_wallets')
-        .select('user_id, balance')
-        .in('user_id', userIds)
-
-      if (walletsError) {
-        console.error('Error fetching wallet data:', walletsError)
-      }
-
       // Get shareholding data
+      const memberEmails = membersData.map(member => member.email)
       const { data: shareholdingsData, error: shareholdingsError } = await supabase
         .from('member_shareholdings')
         .select('member_email, shares_owned, share_percentage')
@@ -87,12 +108,6 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
 
       // Transform and combine the data
       const transformedMembers: CapTableMember[] = membersData.map(member => {
-        // Find user profile for this member
-        const userProfile = usersData?.find(user => user.email === member.email)
-        
-        // Find wallet balance for this user
-        const wallet = walletsData?.find(wallet => wallet.user_id === userProfile?.id)
-        
         // Find shareholding for this member
         const shareholding = shareholdingsData?.find(sh => sh.member_email === member.email)
 
@@ -101,7 +116,7 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
           name: member.name,
           email: member.email,
           position: member.position,
-          balance: wallet?.balance || 0,
+          balance: member.credit_balance || 0, // Use credit_balance from company_members table
           shares_owned: shareholding?.shares_owned || 0,
           share_percentage: shareholding?.share_percentage || 0
         }
@@ -129,6 +144,62 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
 
   const formatShares = (shares: number) => {
     return new Intl.NumberFormat('en-US').format(shares)
+  }
+
+  // Handler functions with retry mechanism
+  const handleMemberAdded = async () => {
+    await loadCapTableDataWithRetry()
+    showNotification('success', 'Member added successfully!')
+  }
+
+  const handleMemberUpdated = async () => {
+    await loadCapTableDataWithRetry()
+    showNotification('success', 'Member updated successfully!')
+  }
+
+  const handleMemberDeleted = async () => {
+    await loadCapTableDataWithRetry()
+    showNotification('success', 'Member deleted successfully!')
+  }
+
+  // Load data with retry mechanism to handle potential timing issues
+  const loadCapTableDataWithRetry = async (retries = 2) => {
+    for (let i = 0; i <= retries; i++) {
+      try {
+        await loadCapTableData()
+        break // Success, exit retry loop
+      } catch (error) {
+        console.warn(`Data load attempt ${i + 1} failed:`, error)
+        if (i < retries) {
+          // Wait a bit before retrying
+          await new Promise(resolve => setTimeout(resolve, 500))
+        } else {
+          console.error('All data load attempts failed')
+        }
+      }
+    }
+  }
+
+  const handleError = (message: string) => {
+    showNotification('error', message)
+  }
+
+  const handleEditMember = (member: CapTableMember) => {
+    setSelectedMember(member)
+    setShowEditModal(true)
+  }
+
+  const handleDeleteMember = (member: CapTableMember) => {
+    setSelectedMember(member)
+    setShowDeleteDialog(true)
+  }
+
+  const showNotification = (type: 'success' | 'error' | 'info', message: string) => {
+    setNotification({ type, message, isVisible: true })
+  }
+
+  const hideNotification = () => {
+    setNotification(prev => ({ ...prev, isVisible: false }))
   }
 
   if (loading) {
@@ -173,14 +244,58 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
     )
   }
 
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-medium text-gray-900">Cap Table</h3>
-        <div className="text-sm text-gray-600">
-          {members.length} member{members.length !== 1 ? 's' : ''}
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-medium text-gray-900">Cap Table</h3>
+          <div className="flex items-center space-x-4">
+            <div className="text-sm text-gray-600">
+              {members.length} member{members.length !== 1 ? 's' : ''}
+            </div>
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium flex items-center space-x-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+              </svg>
+              <span>Add Member</span>
+            </button>
+          </div>
         </div>
-      </div>
+
+        {/* Share Summary */}
+        {companyData && companyData.total_shares && (
+          <div className="bg-gray-50 rounded-lg p-4">
+            <h4 className="text-sm font-medium text-gray-900 mb-3">Share Summary</h4>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div>
+                <div className="text-sm text-gray-500">Total Authorized</div>
+                <div className="text-lg font-semibold text-gray-900">
+                  {formatShares(companyData.total_shares)}
+                </div>
+              </div>
+              <div>
+                <div className="text-sm text-gray-500">Issued</div>
+                <div className="text-lg font-semibold text-gray-900">
+                  {formatShares(companyData.issued_shares || 0)}
+                </div>
+              </div>
+              <div>
+                <div className="text-sm text-gray-500">Available</div>
+                <div className="text-lg font-semibold text-green-600">
+                  {formatShares(companyData.total_shares - (companyData.issued_shares || 0))}
+                </div>
+              </div>
+              <div>
+                <div className="text-sm text-gray-500">Issued %</div>
+                <div className="text-lg font-semibold text-gray-900">
+                  {formatPercentage(((companyData.issued_shares || 0) / companyData.total_shares) * 100)}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
       {/* Desktop Table */}
       <div className="hidden md:block">
@@ -199,6 +314,9 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Share in Company
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Actions
                 </th>
               </tr>
             </thead>
@@ -234,6 +352,26 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
                       <div className="text-gray-500">{formatPercentage(member.share_percentage)}</div>
                     </div>
                   </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={() => handleEditMember(member)}
+                        className="text-indigo-600 hover:text-indigo-900"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={() => handleDeleteMember(member)}
+                        className="text-red-600 hover:text-red-900"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -253,9 +391,27 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
                   </span>
                 </div>
               </div>
-              <div className="ml-3">
+              <div className="ml-3 flex-1">
                 <div className="text-sm font-medium text-gray-900">{member.name}</div>
                 <div className="text-sm text-gray-500">{member.position}</div>
+              </div>
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => handleEditMember(member)}
+                  className="text-indigo-600 hover:text-indigo-900"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => handleDeleteMember(member)}
+                  className="text-red-600 hover:text-red-900"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
               </div>
             </div>
             
@@ -278,6 +434,41 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
           </div>
         ))}
       </div>
+
+      {/* Modals and Notifications */}
+      <AddMemberModal
+        isOpen={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        companyId={companyId}
+        companyData={companyData}
+        onMemberAdded={handleMemberAdded}
+        onError={handleError}
+      />
+
+      <EditMemberModal
+        isOpen={showEditModal}
+        onClose={() => setShowEditModal(false)}
+        companyId={companyId}
+        companyData={companyData}
+        member={selectedMember}
+        onMemberUpdated={handleMemberUpdated}
+        onError={handleError}
+      />
+
+      <DeleteConfirmationDialog
+        isOpen={showDeleteDialog}
+        onClose={() => setShowDeleteDialog(false)}
+        companyId={companyId}
+        member={selectedMember}
+        onMemberDeleted={handleMemberDeleted}
+      />
+
+      <Notification
+        type={notification.type}
+        message={notification.message}
+        isVisible={notification.isVisible}
+        onClose={hideNotification}
+      />
     </div>
   )
 }
