@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter, useSearchParams } from 'next/navigation'
+import CompanyDetailsModal from '@/components/CompanyDetailsModal'
+import CompanyManageInterface from '@/components/CompanyManageInterface'
 
 interface Company {
   id: string
@@ -50,6 +52,27 @@ export default function CompaniesPage() {
   const [countryStateData, setCountryStateData] = useState<CountryState>({
     countries: [],
     states: []
+  })
+  
+  // Modal and interface states
+  const [detailsModal, setDetailsModal] = useState<{
+    isOpen: boolean
+    companyId: string
+    companyName: string
+  }>({
+    isOpen: false,
+    companyId: '',
+    companyName: ''
+  })
+  
+  const [manageInterface, setManageInterface] = useState<{
+    isOpen: boolean
+    companyId: string
+    companyName: string
+  }>({
+    isOpen: false,
+    companyId: '',
+    companyName: ''
   })
 
   useEffect(() => {
@@ -346,11 +369,25 @@ export default function CompaniesPage() {
                         {(company as any).company_members?.length || 0} member(s)
                       </div>
                       <div className="flex space-x-2">
-                        <button className="text-indigo-600 hover:text-indigo-800 text-sm font-medium">
+                        <button 
+                          onClick={() => setDetailsModal({
+                            isOpen: true,
+                            companyId: company.id,
+                            companyName: company.name
+                          })}
+                          className="text-indigo-600 hover:text-indigo-800 text-sm font-medium"
+                        >
                           View Details
                         </button>
                         {company.created_by === user?.id && (
-                          <button className="text-gray-600 hover:text-gray-800 text-sm font-medium">
+                          <button 
+                            onClick={() => setManageInterface({
+                              isOpen: true,
+                              companyId: company.id,
+                              companyName: company.name
+                            })}
+                            className="text-gray-600 hover:text-gray-800 text-sm font-medium"
+                          >
                             Manage
                           </button>
                         )}
@@ -363,6 +400,25 @@ export default function CompaniesPage() {
           </div>
         )}
       </div>
+
+      {/* Company Details Modal */}
+      <CompanyDetailsModal
+        companyId={detailsModal.companyId}
+        companyName={detailsModal.companyName}
+        isOpen={detailsModal.isOpen}
+        onClose={() => setDetailsModal({ isOpen: false, companyId: '', companyName: '' })}
+      />
+
+      {/* Company Management Interface */}
+      {manageInterface.isOpen && (
+        <div className="fixed inset-0 z-50 bg-white">
+          <CompanyManageInterface
+            companyId={manageInterface.companyId}
+            companyName={manageInterface.companyName}
+            onBack={() => setManageInterface({ isOpen: false, companyId: '', companyName: '' })}
+          />
+        </div>
+      )}
     </div>
   )
 }
