@@ -229,9 +229,9 @@ export default function DashboardPage() {
                 <p className="text-gray-600 mb-6">
                   Onboard companies to kickstart their auction journey on the platform.
                 </p>
-                <button className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition-colors">
-                  Onboard Existing Company
-                </button>
+              <a href="/dashboard/onboard-company" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition-colors inline-block text-center">
+                Onboard Existing Company
+              </a>
               </div>
             </div>
           </div>
