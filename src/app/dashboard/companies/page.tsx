@@ -116,75 +116,30 @@ export default function CompaniesPage() {
         })
       }
 
-      // First, get companies where user is the creator
-      const { data: ownedCompanies, error: ownedError } = await supabase
-        .from('companies')
-        .select(`
-          id,
-          name,
-          address,
-          country_code,
-          state_code,
-          business_structure,
-          created_at,
-          created_by,
-          company_members (
-            id,
-            name,
-            email,
-            position
-          )
-        `)
-        .eq('created_by', user.id)
+      // Use the new view that handles both owned and member companies
+      const { data: companiesData, error } = await supabase
+        .from('user_accessible_companies')
+        .select('*')
         .order('created_at', { ascending: false })
-
-      // Then, get companies where user is a member
-      const { data: memberCompanies, error: memberError } = await supabase
-        .from('companies')
-        .select(`
-          id,
-          name,
-          address,
-          country_code,
-          state_code,
-          business_structure,
-          created_at,
-          created_by,
-          company_members!inner (
-            id,
-            name,
-            email,
-            position
-          )
-        `)
-        .eq('company_members.email', user.email)
-        .neq('created_by', user.id) // Exclude companies where user is already the creator
-        .order('created_at', { ascending: false })
-
-      let companiesData: any[] = []
-      let error = null
-
-      if (ownedError) {
-        console.error('Error fetching owned companies:', ownedError)
-        error = ownedError
-      } else if (memberError) {
-        console.error('Error fetching member companies:', memberError)
-        error = memberError
-      } else {
-        // Combine both arrays and remove duplicates
-        const allCompanies = [...(ownedCompanies || []), ...(memberCompanies || [])]
-        const uniqueCompanies = allCompanies.filter((company, index, self) => 
-          index === self.findIndex(c => c.id === company.id)
-        )
-        companiesData = uniqueCompanies.sort((a, b) => 
-          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        )
-      }
 
       if (error) {
         console.error('Error fetching companies:', error)
       } else {
-        setCompanies(companiesData || [])
+        // For each company, get the member count
+        const companiesWithMembers = await Promise.all(
+          (companiesData || []).map(async (company) => {
+            const { data: members } = await supabase
+              .from('company_members')
+              .select('id')
+              .eq('company_id', company.id)
+            
+            return {
+              ...company,
+              company_members: members || []
+            }
+          })
+        )
+        setCompanies(companiesWithMembers)
       }
     } catch (error) {
       console.error('Error loading data:', error)
@@ -341,11 +296,11 @@ export default function CompaniesPage() {
                     </div>
                     <div className="flex-shrink-0">
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        company.created_by === user?.id 
+                        (company as any).user_role === 'owner'
                           ? 'bg-green-100 text-green-800' 
                           : 'bg-blue-100 text-blue-800'
                       }`}>
-                        {company.created_by === user?.id ? 'Owner' : 'Member'}
+                        {(company as any).user_role === 'owner' ? 'Owner' : 'Member'}
                       </span>
                     </div>
                   </div>
@@ -379,7 +334,7 @@ export default function CompaniesPage() {
                         >
                           View Details
                         </button>
-                        {company.created_by === user?.id && (
+                        {(company as any).user_role === 'owner' && (
                           <button 
                             onClick={() => setManageInterface({
                               isOpen: true,
