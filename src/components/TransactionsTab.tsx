@@ -2,12 +2,16 @@
 
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import CreateTransactionModal from './CreateTransactionModal'
 
 interface Transaction {
   id: string
   transaction_type: string
-  amount: number
-  description: string
+  amount: number | null
+  share_quantity: number | null
+  from_member_email: string | null
+  to_member_email: string
+  description: string | null
   created_at: string
 }
 
@@ -18,6 +22,7 @@ interface TransactionsTabProps {
 export default function TransactionsTab({ companyId }: TransactionsTabProps) {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [loading, setLoading] = useState(true)
+  const [showCreateModal, setShowCreateModal] = useState(false)
 
   useEffect(() => {
     if (companyId) {
@@ -32,7 +37,7 @@ export default function TransactionsTab({ companyId }: TransactionsTabProps) {
     try {
       const { data, error } = await supabase
         .from('company_transactions')
-        .select('id, transaction_type, amount, description, created_at')
+        .select('id, transaction_type, amount, share_quantity, from_member_email, to_member_email, description, created_at')
         .eq('company_id', companyId)
         .order('created_at', { ascending: false })
 
@@ -127,7 +132,10 @@ export default function TransactionsTab({ companyId }: TransactionsTabProps) {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-medium text-gray-900">Transactions</h3>
-        <button className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium">
+        <button 
+          onClick={() => setShowCreateModal(true)}
+          className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium"
+        >
           New Transaction
         </button>
       </div>
@@ -141,7 +149,10 @@ export default function TransactionsTab({ companyId }: TransactionsTabProps) {
             <p className="text-lg font-medium text-gray-900">No Transactions Yet</p>
             <p className="text-sm text-gray-600 mt-2">All company financial transactions will appear here.</p>
           </div>
-          <button className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-md text-sm font-medium">
+          <button 
+            onClick={() => setShowCreateModal(true)}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-md text-sm font-medium"
+          >
             Record First Transaction
           </button>
         </div>
@@ -157,16 +168,16 @@ export default function TransactionsTab({ companyId }: TransactionsTabProps) {
                       Type
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Amount
+                      Amount/Shares
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Between
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Description
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Date
-                    </th>
-                    <th className="relative px-6 py-3">
-                      <span className="sr-only">Actions</span>
                     </th>
                   </tr>
                 </thead>
@@ -185,7 +196,31 @@ export default function TransactionsTab({ companyId }: TransactionsTabProps) {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm font-medium text-gray-900">
-                          {formatCurrency(transaction.amount)}
+                          {transaction.amount ? formatCurrency(transaction.amount) : 
+                           transaction.share_quantity ? `${transaction.share_quantity} shares` : 
+                           'N/A'}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="text-sm text-gray-900">
+                          {transaction.from_member_email ? (
+                            <div className="space-y-1">
+                              <div className="flex items-center text-xs text-gray-500">
+                                <span className="mr-1">From:</span>
+                                <span className="font-medium">{transaction.from_member_email}</span>
+                              </div>
+                              <div className="flex items-center text-xs text-gray-500">
+                                <span className="mr-1">To:</span>
+                                <span className="font-medium">{transaction.to_member_email}</span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-xs text-gray-500">
+                              <span className="mr-1">To:</span>
+                              <span className="font-medium">{transaction.to_member_email}</span>
+                              <div className="text-xs text-gray-400 mt-1">(Company Issuance)</div>
+                            </div>
+                          )}
                         </div>
                       </td>
                       <td className="px-6 py-4">
@@ -197,11 +232,6 @@ export default function TransactionsTab({ companyId }: TransactionsTabProps) {
                         <div className="text-sm text-gray-500">
                           {formatDate(transaction.created_at)}
                         </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <button className="text-indigo-600 hover:text-indigo-900">
-                          View
-                        </button>
                       </td>
                     </tr>
                   ))}
@@ -226,20 +256,44 @@ export default function TransactionsTab({ companyId }: TransactionsTabProps) {
                     </div>
                   </div>
                   <div className="text-lg font-medium text-gray-900">
-                    {formatCurrency(transaction.amount)}
+                    {transaction.amount ? formatCurrency(transaction.amount) : 
+                     transaction.share_quantity ? `${transaction.share_quantity} shares` : 
+                     'N/A'}
                   </div>
                 </div>
                 
                 <div className="space-y-2">
                   <div>
+                    <span className="text-sm text-gray-500">Between:</span>
+                    <div className="text-sm text-gray-900">
+                      {transaction.from_member_email ? (
+                        <div className="space-y-1">
+                          <div className="flex items-center">
+                            <span className="text-xs text-gray-500 mr-1">From:</span>
+                            <span className="font-medium">{transaction.from_member_email}</span>
+                          </div>
+                          <div className="flex items-center">
+                            <span className="text-xs text-gray-500 mr-1">To:</span>
+                            <span className="font-medium">{transaction.to_member_email}</span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="flex items-center">
+                            <span className="text-xs text-gray-500 mr-1">To:</span>
+                            <span className="font-medium">{transaction.to_member_email}</span>
+                          </div>
+                          <div className="text-xs text-gray-400 mt-1">(Company Issuance)</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div>
                     <span className="text-sm text-gray-500">Description:</span>
                     <p className="text-sm text-gray-900">{transaction.description || 'No description'}</p>
                   </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-500">{formatDate(transaction.created_at)}</span>
-                    <button className="text-indigo-600 hover:text-indigo-900 text-sm font-medium">
-                      View Details
-                    </button>
+                  <div className="text-sm text-gray-500">
+                    {formatDate(transaction.created_at)}
                   </div>
                 </div>
               </div>
@@ -247,6 +301,14 @@ export default function TransactionsTab({ companyId }: TransactionsTabProps) {
           </div>
         </div>
       )}
+
+      {/* Create Transaction Modal */}
+      <CreateTransactionModal
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        companyId={companyId}
+        onTransactionCreated={loadTransactions}
+      />
     </div>
   )
 }
