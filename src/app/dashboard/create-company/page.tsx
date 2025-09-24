@@ -34,6 +34,7 @@ interface Member {
   name: string
   email: string
   position: string
+  credit_balance: string
 }
 
 const BUSINESS_STRUCTURES = [
@@ -65,6 +66,27 @@ const parseFormattedNumber = (value: string): number => {
   return isNaN(numValue) ? 0 : numValue
 }
 
+// Utility function to format credit balance with commas (supports decimals)
+const formatCreditBalance = (value: string): string => {
+  // Remove all non-digit characters except decimal point
+  const cleanValue = value.replace(/[^\d.]/g, '')
+  
+  // Handle decimal numbers for credit balance
+  if (cleanValue.includes('.')) {
+    const [integerPart, decimalPart] = cleanValue.split('.')
+    const formattedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+    return decimalPart !== undefined ? `${formattedInteger}.${decimalPart}` : formattedInteger
+  }
+  
+  // Format integer part with commas
+  return cleanValue.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+}
+
+// Utility function to remove commas for API submission
+const removeCommas = (value: string): string => {
+  return value.replace(/,/g, '')
+}
+
 export default function CreateCompanyPage() {
   const router = useRouter()
   const [currentStep, setCurrentStep] = useState(1)
@@ -81,7 +103,7 @@ export default function CreateCompanyPage() {
   })
   
   const [members, setMembers] = useState<Member[]>([
-    { name: '', email: '', position: 'CEO' }
+    { name: '', email: '', position: 'CEO', credit_balance: '' }
   ])
   
   const [treasuryData, setTreasuryData] = useState<TreasuryFormData>({
@@ -194,6 +216,14 @@ export default function CreateCompanyPage() {
         if (member.position && !POSITIONS.includes(member.position)) {
           newErrors[`member_${index}_position`] = 'Invalid position selected'
         }
+        
+        // Validate credit balance (optional but must be non-negative if provided)
+        if (member.credit_balance && member.credit_balance.trim()) {
+          const creditValue = parseFloat(removeCommas(member.credit_balance))
+          if (isNaN(creditValue) || creditValue < 0) {
+            newErrors[`member_${index}_credit_balance`] = 'Credit balance must be a non-negative number'
+          }
+        }
       })
       
       // Check for duplicate emails
@@ -245,7 +275,7 @@ export default function CreateCompanyPage() {
   }
 
   const addMember = () => {
-    setMembers(prev => [...prev, { name: '', email: '', position: 'CEO' }])
+    setMembers(prev => [...prev, { name: '', email: '', position: 'CEO', credit_balance: '' }])
   }
 
   const removeMember = (index: number) => {
@@ -289,9 +319,14 @@ export default function CreateCompanyPage() {
       
       console.log('Company created successfully:', company)
       
-      // Create members
+      // Create members with proper credit balance conversion
       const membersData = members.map(member => ({
-        ...member,
+        name: member.name,
+        email: member.email,
+        position: member.position,
+        credit_balance: member.credit_balance && member.credit_balance.trim() 
+          ? parseFloat(removeCommas(member.credit_balance)) 
+          : 0,
         company_id: company.id
       }))
       
@@ -554,7 +589,7 @@ export default function CreateCompanyPage() {
                       )}
                     </div>
                     
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
                           Name *
@@ -611,6 +646,30 @@ export default function CreateCompanyPage() {
                         </select>
                         {errors[`member_${index}_position`] && (
                           <p className="mt-1 text-sm text-red-600">{errors[`member_${index}_position`]}</p>
+                        )}
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Credit Balance (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          value={member.credit_balance}
+                          onChange={(e) => {
+                            const formatted = formatCreditBalance(e.target.value)
+                            updateMember(index, 'credit_balance', formatted)
+                          }}
+                          className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 ${
+                            errors[`member_${index}_credit_balance`] ? 'border-red-300' : 'border-gray-300'
+                          }`}
+                          placeholder="0.00"
+                        />
+                        <p className="mt-1 text-xs text-gray-500">
+                          Initial credit balance in USD
+                        </p>
+                        {errors[`member_${index}_credit_balance`] && (
+                          <p className="mt-1 text-sm text-red-600">{errors[`member_${index}_credit_balance`]}</p>
                         )}
                       </div>
                     </div>
@@ -788,16 +847,30 @@ export default function CreateCompanyPage() {
                       Edit
                     </button>
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     {members.map((member, index) => (
-                      <div key={index} className="flex justify-between items-center text-sm">
-                        <div>
-                          <span className="font-medium">{member.name}</span>
-                          <span className="text-gray-600 ml-2">({member.email})</span>
+                      <div key={index} className="border-l-2 border-indigo-200 pl-3">
+                        <div className="flex justify-between items-start text-sm">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-medium">{member.name}</span>
+                              <span className="bg-indigo-100 text-indigo-800 px-2 py-1 rounded text-xs">
+                                {member.position}
+                              </span>
+                            </div>
+                            <div className="text-gray-600 text-xs">
+                              <span>{member.email}</span>
+                              {member.credit_balance && member.credit_balance.trim() && (
+                                <span className="ml-3">
+                                  Credit Balance: ${parseFloat(removeCommas(member.credit_balance)).toLocaleString('en-US', {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2
+                                  })}
+                                </span>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        <span className="bg-indigo-100 text-indigo-800 px-2 py-1 rounded text-xs">
-                          {member.position}
-                        </span>
                       </div>
                     ))}
                   </div>
