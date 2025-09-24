@@ -112,6 +112,31 @@ export async function PUT(
       }, { status: 404 })
     }
 
+    // Check for active cap table session
+    const { data: activeSession, error: sessionError } = await supabase
+      .from('cap_table_sessions')
+      .select('id, is_active')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .single()
+
+    if (sessionError && sessionError.code !== 'PGRST116') { // PGRST116 = no rows returned
+      console.error('Error checking session:', sessionError)
+      return NextResponse.json({ 
+        success: false, 
+        error: 'Failed to check session status',
+        code: 'SESSION_CHECK_FAILED'
+      }, { status: 500 })
+    }
+
+    if (!activeSession) {
+      return NextResponse.json({ 
+        success: false,
+        error: 'No active cap table session. Please start a session to make changes.',
+        code: 'NO_ACTIVE_SESSION'
+      }, { status: 403 })
+    }
+
     // Validate company has required configuration for share updates
     if (shares !== undefined && !company.total_shares) {
       return NextResponse.json({ 
@@ -401,6 +426,26 @@ export async function DELETE(
 
     if (companyError || !company) {
       return NextResponse.json({ error: 'Company not found or access denied' }, { status: 404 })
+    }
+
+    // Check for active cap table session
+    const { data: activeSession, error: sessionError } = await supabase
+      .from('cap_table_sessions')
+      .select('id, is_active')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .single()
+
+    if (sessionError && sessionError.code !== 'PGRST116') { // PGRST116 = no rows returned
+      console.error('Error checking session:', sessionError)
+      return NextResponse.json({ error: 'Failed to check session status' }, { status: 500 })
+    }
+
+    if (!activeSession) {
+      return NextResponse.json({ 
+        error: 'No active cap table session. Please start a session to make changes.',
+        code: 'NO_ACTIVE_SESSION'
+      }, { status: 403 })
     }
 
     // Get member data before deletion

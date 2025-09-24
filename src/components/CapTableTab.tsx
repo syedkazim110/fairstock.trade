@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import AddMemberModal from './AddMemberModal'
 import EditMemberModal from './EditMemberModal'
 import DeleteConfirmationDialog from './DeleteConfirmationDialog'
+import CapTablePaymentModal from './CapTablePaymentModal'
 import Notification from './Notification'
 
 interface CapTableMember {
@@ -20,6 +21,14 @@ interface CapTableMember {
 interface CompanyData {
   total_shares: number | null
   issued_shares: number | null
+  name?: string
+}
+
+interface SessionData {
+  id: string
+  session_fee: number
+  paid_at: string
+  is_active: boolean
 }
 
 interface CapTableTabProps {
@@ -29,6 +38,9 @@ interface CapTableTabProps {
 export default function CapTableTab({ companyId }: CapTableTabProps) {
   const [members, setMembers] = useState<CapTableMember[]>([])
   const [companyData, setCompanyData] = useState<CompanyData | null>(null)
+  const [ownerCreditBalance, setOwnerCreditBalance] = useState<number>(0)
+  const [sessionData, setSessionData] = useState<SessionData | null>(null)
+  const [hasActiveSession, setHasActiveSession] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   
@@ -36,6 +48,7 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
   const [showAddModal, setShowAddModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [selectedMember, setSelectedMember] = useState<CapTableMember | null>(null)
   
   // Notification state
@@ -52,6 +65,7 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
   useEffect(() => {
     if (companyId) {
       loadCapTableData()
+      loadSessionData()
     }
   }, [companyId])
 
@@ -61,10 +75,29 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
     const supabase = createClient()
     
     try {
+      // Get the current user to identify the owner
+      const { data: { user }, error: userError } = await supabase.auth.getUser()
+      if (userError || !user) {
+        setError('Failed to identify user')
+        return
+      }
+
+      // Get user profile to get their email
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('email')
+        .eq('id', user.id)
+        .single()
+
+      if (profileError || !profile) {
+        setError('Failed to load user profile')
+        return
+      }
+
       // First, get company data including share information
       const { data: company, error: companyError } = await supabase
         .from('companies')
-        .select('total_shares, issued_shares')
+        .select('name, total_shares, issued_shares')
         .eq('id', companyId)
         .single()
 
@@ -91,7 +124,16 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
 
       if (!membersData || membersData.length === 0) {
         setMembers([])
+        setOwnerCreditBalance(0)
         return
+      }
+
+      // Find the owner member by matching email
+      const ownerMember = membersData.find(member => member.email === profile.email)
+      if (ownerMember) {
+        setOwnerCreditBalance(ownerMember.credit_balance || 0)
+      } else {
+        setOwnerCreditBalance(0)
       }
 
       // Get shareholding data
@@ -131,6 +173,32 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
     }
   }
 
+  const loadSessionData = async () => {
+    try {
+      const response = await fetch(`/api/companies/${companyId}/cap-table-session`)
+      if (response.ok) {
+        const data = await response.json()
+        setSessionData(data.session)
+        setHasActiveSession(data.has_active_session)
+        
+        // Update owner credit balance from the API response
+        if (data.company && data.company.owner_credit_balance !== undefined) {
+          setOwnerCreditBalance(data.company.owner_credit_balance)
+        }
+        
+        // Update company data
+        if (data.company && companyData) {
+          setCompanyData(prev => prev ? {
+            ...prev,
+            name: data.company.name
+          } : null)
+        }
+      }
+    } catch (error) {
+      console.error('Error loading session data:', error)
+    }
+  }
+
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -162,6 +230,43 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
     showNotification('success', 'Member deleted successfully!')
   }
 
+  const handlePaymentSuccess = async () => {
+    await loadCapTableDataWithRetry()
+    await loadSessionData()
+    showNotification('success', 'Cap table session started! You can now make changes.')
+  }
+
+  const handleCompleteSession = async () => {
+    try {
+      const response = await fetch(`/api/companies/${companyId}/cap-table-session`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'complete' })
+      })
+
+      if (response.ok) {
+        await loadSessionData()
+        showNotification('success', 'Cap table session completed!')
+      } else {
+        const error = await response.json()
+        showNotification('error', error.error || 'Failed to complete session')
+      }
+    } catch (error) {
+      console.error('Error completing session:', error)
+      showNotification('error', 'Failed to complete session')
+    }
+  }
+
+  const handleCapTableAction = (action: () => void) => {
+    if (hasActiveSession) {
+      action()
+    } else {
+      setShowPaymentModal(true)
+    }
+  }
+
   // Load data with retry mechanism to handle potential timing issues
   const loadCapTableDataWithRetry = async (retries = 2) => {
     for (let i = 0; i <= retries; i++) {
@@ -185,13 +290,23 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
   }
 
   const handleEditMember = (member: CapTableMember) => {
-    setSelectedMember(member)
-    setShowEditModal(true)
+    handleCapTableAction(() => {
+      setSelectedMember(member)
+      setShowEditModal(true)
+    })
   }
 
   const handleDeleteMember = (member: CapTableMember) => {
-    setSelectedMember(member)
-    setShowDeleteDialog(true)
+    handleCapTableAction(() => {
+      setSelectedMember(member)
+      setShowDeleteDialog(true)
+    })
+  }
+
+  const handleAddMember = () => {
+    handleCapTableAction(() => {
+      setShowAddModal(true)
+    })
   }
 
   const showNotification = (type: 'success' | 'error' | 'info', message: string) => {
@@ -247,13 +362,35 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-medium text-gray-900">Cap Table</h3>
           <div className="flex items-center space-x-4">
+            <h3 className="text-lg font-medium text-gray-900">Cap Table</h3>
+            {hasActiveSession && (
+              <div className="flex items-center space-x-2">
+                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                <span className="text-sm text-green-600 font-medium">Session Active</span>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center space-x-4">
+            <div className="text-sm text-gray-600">
+              Owner Credit: <span className="font-medium">${ownerCreditBalance.toFixed(2)}</span>
+            </div>
             <div className="text-sm text-gray-600">
               {members.length} member{members.length !== 1 ? 's' : ''}
             </div>
+            {hasActiveSession && (
+              <button
+                onClick={handleCompleteSession}
+                className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm font-medium flex items-center space-x-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                <span>Complete Changes</span>
+              </button>
+            )}
             <button
-              onClick={() => setShowAddModal(true)}
+              onClick={handleAddMember}
               className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium flex items-center space-x-2"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -461,6 +598,16 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
         companyId={companyId}
         member={selectedMember}
         onMemberDeleted={handleMemberDeleted}
+      />
+
+      <CapTablePaymentModal
+        isOpen={showPaymentModal}
+        onClose={() => setShowPaymentModal(false)}
+        companyId={companyId}
+        companyName={companyData?.name || 'Company'}
+        currentBalance={ownerCreditBalance}
+        onPaymentSuccess={handlePaymentSuccess}
+        onError={handleError}
       />
 
       <Notification

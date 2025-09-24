@@ -35,6 +35,27 @@ export default function AddMemberModal({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Utility function to format number with commas
+  const formatNumberWithCommas = (value: string): string => {
+    // Remove all non-digit characters except decimal point
+    const cleanValue = value.replace(/[^\d.]/g, '')
+    
+    // Handle decimal numbers for credit balance
+    if (cleanValue.includes('.')) {
+      const [integerPart, decimalPart] = cleanValue.split('.')
+      const formattedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+      return decimalPart !== undefined ? `${formattedInteger}.${decimalPart}` : formattedInteger
+    }
+    
+    // Format integer part with commas
+    return cleanValue.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  }
+
+  // Utility function to remove commas for API submission
+  const removeCommas = (value: string): string => {
+    return value.replace(/,/g, '')
+  }
+
   // Calculate available shares
   const availableShares = companyData?.total_shares 
     ? companyData.total_shares - (companyData.issued_shares || 0)
@@ -60,8 +81,8 @@ export default function AddMemberModal({
         name: formData.name.trim(),
         email: formData.email.trim().toLowerCase(),
         position: formData.position,
-        initialShares: formData.initialShares ? parseInt(formData.initialShares) : 0,
-        initialCreditBalance: formData.initialCreditBalance ? parseFloat(formData.initialCreditBalance) : 0
+        initialShares: formData.initialShares ? parseInt(removeCommas(formData.initialShares)) : 0,
+        initialCreditBalance: formData.initialCreditBalance ? parseFloat(removeCommas(formData.initialCreditBalance)) : 0
       }
 
       // Validate email format
@@ -221,14 +242,15 @@ export default function AddMemberModal({
                 Initial Shares (Optional)
               </label>
               <input
-                type="number"
+                type="text"
                 id="initialShares"
-                min="0"
-                max={availableShares || undefined}
                 value={formData.initialShares}
-                onChange={(e) => handleInputChange('initialShares', e.target.value)}
+                onChange={(e) => {
+                  const formatted = formatNumberWithCommas(e.target.value)
+                  handleInputChange('initialShares', formatted)
+                }}
                 className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 ${
-                  formData.initialShares && availableShares !== null && parseInt(formData.initialShares) > availableShares
+                  formData.initialShares && availableShares !== null && parseInt(removeCommas(formData.initialShares)) > availableShares
                     ? 'border-red-300 bg-red-50'
                     : 'border-gray-300'
                 }`}
@@ -244,9 +266,9 @@ export default function AddMemberModal({
                     Available: {new Intl.NumberFormat('en-US').format(availableShares)} shares
                   </p>
                 )}
-                {formData.initialShares && availableShares !== null && parseInt(formData.initialShares) > availableShares && (
+                {formData.initialShares && availableShares !== null && parseInt(removeCommas(formData.initialShares)) > availableShares && (
                   <p className="text-red-600">
-                    Exceeds available shares by {new Intl.NumberFormat('en-US').format(parseInt(formData.initialShares) - availableShares)}
+                    Exceeds available shares by {new Intl.NumberFormat('en-US').format(parseInt(removeCommas(formData.initialShares)) - availableShares)}
                   </p>
                 )}
               </div>
@@ -258,12 +280,13 @@ export default function AddMemberModal({
                 Initial Credit Balance (Optional)
               </label>
               <input
-                type="number"
+                type="text"
                 id="initialCreditBalance"
-                min="0"
-                step="0.01"
                 value={formData.initialCreditBalance}
-                onChange={(e) => handleInputChange('initialCreditBalance', e.target.value)}
+                onChange={(e) => {
+                  const formatted = formatNumberWithCommas(e.target.value)
+                  handleInputChange('initialCreditBalance', formatted)
+                }}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                 placeholder="0.00"
                 disabled={loading}

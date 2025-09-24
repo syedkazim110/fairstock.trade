@@ -90,6 +90,9 @@ export default function CreateCompanyPage() {
     issued_shares: 0
   })
   
+  // Separate state for par value input display
+  const [parValueInput, setParValueInput] = useState('0.01')
+  
   // Dropdown data
   const [countries, setCountries] = useState<Country[]>([])
   const [states, setStates] = useState<State[]>([])
@@ -664,11 +667,17 @@ export default function CreateCompanyPage() {
                         Par Value *
                       </label>
                       <input
-                        type="number"
-                        min="0.0001"
-                        step="0.0001"
-                        value={treasuryData.par_value || ''}
-                        onChange={(e) => setTreasuryData(prev => ({ ...prev, par_value: parseFloat(e.target.value) || 0 }))}
+                        type="text"
+                        value={parValueInput}
+                        onChange={(e) => {
+                          const value = e.target.value
+                          // Allow empty string, digits, and decimal point
+                          if (value === '' || /^\d*\.?\d*$/.test(value)) {
+                            setParValueInput(value)
+                            const numValue = value === '' ? 0 : parseFloat(value) || 0
+                            setTreasuryData(prev => ({ ...prev, par_value: numValue }))
+                          }
+                        }}
                         className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 ${
                           errors.par_value ? 'border-red-300' : 'border-gray-300'
                         }`}

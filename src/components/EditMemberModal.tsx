@@ -45,6 +45,27 @@ export default function EditMemberModal({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Utility function to format number with commas
+  const formatNumberWithCommas = (value: string): string => {
+    // Remove all non-digit characters except decimal point
+    const cleanValue = value.replace(/[^\d.]/g, '')
+    
+    // Handle decimal numbers for credit balance
+    if (cleanValue.includes('.')) {
+      const [integerPart, decimalPart] = cleanValue.split('.')
+      const formattedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+      return decimalPart !== undefined ? `${formattedInteger}.${decimalPart}` : formattedInteger
+    }
+    
+    // Format integer part with commas
+    return cleanValue.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  }
+
+  // Utility function to remove commas for API submission
+  const removeCommas = (value: string): string => {
+    return value.replace(/,/g, '')
+  }
+
   // Calculate available shares (including current member's shares)
   const availableShares = companyData?.total_shares && member
     ? companyData.total_shares - (companyData.issued_shares || 0) + member.shares_owned
@@ -88,12 +109,12 @@ export default function EditMemberModal({
         submitData.position = formData.position
       }
       
-      const newShares = formData.shares ? parseInt(formData.shares) : 0
+      const newShares = formData.shares ? parseInt(removeCommas(formData.shares)) : 0
       if (newShares !== member.shares_owned) {
         submitData.shares = newShares
       }
       
-      const newCreditBalance = formData.creditBalance ? parseFloat(formData.creditBalance) : 0
+      const newCreditBalance = formData.creditBalance ? parseFloat(removeCommas(formData.creditBalance)) : 0
       if (Math.abs(newCreditBalance - member.balance) > 0.01) { // Account for floating point precision
         submitData.creditBalance = newCreditBalance
       }
@@ -286,14 +307,15 @@ export default function EditMemberModal({
                 Shares Owned
               </label>
               <input
-                type="number"
+                type="text"
                 id="shares"
-                min="0"
-                max={availableShares || undefined}
                 value={formData.shares}
-                onChange={(e) => handleInputChange('shares', e.target.value)}
+                onChange={(e) => {
+                  const formatted = formatNumberWithCommas(e.target.value)
+                  handleInputChange('shares', formatted)
+                }}
                 className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 ${
-                  formData.shares && availableShares !== null && parseInt(formData.shares) > availableShares
+                  formData.shares && availableShares !== null && parseInt(removeCommas(formData.shares)) > availableShares
                     ? 'border-red-300 bg-red-50'
                     : 'border-gray-300'
                 }`}
@@ -309,9 +331,9 @@ export default function EditMemberModal({
                     Available: {new Intl.NumberFormat('en-US').format(availableShares)} shares (including current allocation)
                   </p>
                 )}
-                {formData.shares && availableShares !== null && parseInt(formData.shares) > availableShares && (
+                {formData.shares && availableShares !== null && parseInt(removeCommas(formData.shares)) > availableShares && (
                   <p className="text-red-600">
-                    Exceeds available shares by {new Intl.NumberFormat('en-US').format(parseInt(formData.shares) - availableShares)}
+                    Exceeds available shares by {new Intl.NumberFormat('en-US').format(parseInt(removeCommas(formData.shares)) - availableShares)}
                   </p>
                 )}
               </div>
@@ -323,12 +345,13 @@ export default function EditMemberModal({
                 Credit Balance
               </label>
               <input
-                type="number"
+                type="text"
                 id="creditBalance"
-                min="0"
-                step="0.01"
                 value={formData.creditBalance}
-                onChange={(e) => handleInputChange('creditBalance', e.target.value)}
+                onChange={(e) => {
+                  const formatted = formatNumberWithCommas(e.target.value)
+                  handleInputChange('creditBalance', formatted)
+                }}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                 placeholder="0.00"
                 disabled={loading}
@@ -339,19 +362,19 @@ export default function EditMemberModal({
             </div>
 
             {/* Preview Changes */}
-            {(formData.shares !== member.shares_owned.toString() || 
-              formData.creditBalance !== member.balance.toString()) && (
+            {(removeCommas(formData.shares) !== member.shares_owned.toString() || 
+              removeCommas(formData.creditBalance) !== member.balance.toString()) && (
               <div className="p-3 bg-blue-50 border border-blue-200 rounded-md">
                 <h4 className="text-sm font-medium text-blue-900 mb-2">Preview Changes:</h4>
                 <div className="text-xs text-blue-700 space-y-1">
-                  {formData.shares !== member.shares_owned.toString() && (
+                  {removeCommas(formData.shares) !== member.shares_owned.toString() && (
                     <p>
-                      Shares: {member.shares_owned.toLocaleString()} → {parseInt(formData.shares || '0').toLocaleString()}
+                      Shares: {member.shares_owned.toLocaleString()} → {parseInt(removeCommas(formData.shares) || '0').toLocaleString()}
                     </p>
                   )}
-                  {formData.creditBalance !== member.balance.toString() && (
+                  {removeCommas(formData.creditBalance) !== member.balance.toString() && (
                     <p>
-                      Balance: ${member.balance.toFixed(2)} → ${parseFloat(formData.creditBalance || '0').toFixed(2)}
+                      Balance: ${member.balance.toFixed(2)} → ${parseFloat(removeCommas(formData.creditBalance) || '0').toFixed(2)}
                     </p>
                   )}
                 </div>

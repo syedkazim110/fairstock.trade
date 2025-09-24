@@ -95,6 +95,26 @@ export async function POST(
       return NextResponse.json({ error: 'Company not found or access denied' }, { status: 404 })
     }
 
+    // Check for active cap table session
+    const { data: activeSession, error: sessionError } = await supabase
+      .from('cap_table_sessions')
+      .select('id, is_active')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .single()
+
+    if (sessionError && sessionError.code !== 'PGRST116') { // PGRST116 = no rows returned
+      console.error('Error checking session:', sessionError)
+      return NextResponse.json({ error: 'Failed to check session status' }, { status: 500 })
+    }
+
+    if (!activeSession) {
+      return NextResponse.json({ 
+        error: 'No active cap table session. Please start a session to make changes.',
+        code: 'NO_ACTIVE_SESSION'
+      }, { status: 403 })
+    }
+
     // Check if adding shares would exceed total shares
     const currentIssuedShares = company.issued_shares || 0
     if (initialShares > 0 && company.total_shares && (currentIssuedShares + initialShares > company.total_shares)) {
@@ -161,9 +181,19 @@ export async function POST(
       }
     }
 
-    // Create or update user wallet if initial credit balance > 0
+    // Store initial credit balance in company_members table if provided
     if (initialCreditBalance > 0) {
-      // First, check if user exists in profiles
+      const { error: creditError } = await supabase
+        .from('company_members')
+        .update({ credit_balance: initialCreditBalance })
+        .eq('id', newMember.id)
+
+      if (creditError) {
+        console.error('Failed to set initial credit balance:', creditError)
+        // Don't fail the entire operation, just log the error
+      }
+
+      // Also try to update user wallet if user profile exists (optional)
       const { data: userProfile } = await supabase
         .from('profiles')
         .select('id')
