@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { capTableNotificationService } from '@/lib/email/notificationService'
 
 // GET /api/companies/[id]/members - Get all members for a company
 export async function GET(
@@ -225,6 +226,15 @@ export async function POST(
         }
       }
     }
+
+    // Send email notification to all company members (async, don't wait for it)
+    capTableNotificationService.notifyMemberAdded(
+      companyId,
+      { name, email, position },
+      user.id
+    ).catch(error => {
+      console.error('Failed to send member added notification:', error)
+    })
 
     return NextResponse.json({ 
       message: 'Member added successfully', 

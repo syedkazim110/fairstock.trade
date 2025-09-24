@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { capTableNotificationService } from '@/lib/email/notificationService'
 
 // PUT /api/companies/[id]/members/[memberId] - Update a member
 export async function PUT(
@@ -366,6 +367,39 @@ export async function PUT(
 
     console.log(`Successfully updated member ${memberId}:`, { updatedFields })
 
+    // Send email notification to all company members (async, don't wait for it)
+    if (updatedFields.length > 0) {
+      const updatedMemberData = {
+        name: name || currentMember.name,
+        email: currentMember.email,
+        position: position || currentMember.position
+      }
+      
+      const changeDescriptions = updatedFields.map(field => {
+        switch (field) {
+          case 'name':
+            return `Name changed from "${currentMember.name}" to "${name}"`
+          case 'position':
+            return `Position changed from "${currentMember.position}" to "${position}"`
+          case 'shares':
+            return `Shares changed from ${currentShares} to ${shares}`
+          case 'creditBalance':
+            return `Credit balance updated to $${creditBalance}`
+          default:
+            return `${field} updated`
+        }
+      })
+
+      capTableNotificationService.notifyMemberUpdated(
+        companyId,
+        updatedMemberData,
+        user.id,
+        changeDescriptions
+      ).catch(error => {
+        console.error('Failed to send member updated notification:', error)
+      })
+    }
+
     return NextResponse.json({ 
       success: true,
       message: 'Member updated successfully',
@@ -451,7 +485,7 @@ export async function DELETE(
     // Get member data before deletion
     const { data: member, error: memberError } = await supabase
       .from('company_members')
-      .select('email')
+      .select('name, email')
       .eq('id', memberId)
       .eq('company_id', companyId)
       .single()
@@ -500,6 +534,15 @@ export async function DELETE(
         console.error('Failed to update company issued shares:', updateCompanyError)
       }
     }
+
+    // Send email notification to remaining company members (async, don't wait for it)
+    capTableNotificationService.notifyMemberRemoved(
+      companyId,
+      { name: member.name, email: member.email },
+      user.id
+    ).catch(error => {
+      console.error('Failed to send member removed notification:', error)
+    })
 
     return NextResponse.json({ message: 'Member deleted successfully' })
 
