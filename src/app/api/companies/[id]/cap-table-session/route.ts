@@ -36,8 +36,10 @@ export async function POST(
       return await startCapTableSession(supabase, company, user.id)
     } else if (action === 'complete') {
       return await completeCapTableSession(supabase, companyId, user.id)
+    } else if (action === 'cancel') {
+      return await cancelCapTableSession(supabase, companyId, user.id)
     } else {
-      return NextResponse.json({ error: 'Invalid action. Use "start" or "complete"' }, { status: 400 })
+      return NextResponse.json({ error: 'Invalid action. Use "start", "complete", or "cancel"' }, { status: 400 })
     }
 
   } catch (error) {
@@ -260,5 +262,92 @@ async function completeCapTableSession(supabase: any, companyId: string, userId:
   return NextResponse.json({
     message: 'Cap table session completed successfully',
     session_id: activeSession.id
+  })
+}
+
+async function cancelCapTableSession(supabase: any, companyId: string, userId: string) {
+  // Find the active session
+  const { data: activeSession, error: findError } = await supabase
+    .from('cap_table_sessions')
+    .select('id, session_fee')
+    .eq('company_id', companyId)
+    .eq('owner_id', userId)
+    .eq('is_active', true)
+    .single()
+
+  if (findError) {
+    if (findError.code === 'PGRST116') { // No rows returned
+      return NextResponse.json({ error: 'No active cap table session found' }, { status: 404 })
+    }
+    console.error('Error finding active session:', findError)
+    return NextResponse.json({ error: 'Failed to find active session' }, { status: 500 })
+  }
+
+  // Get the company creator's email to identify the admin member for refund
+  const { data: creatorProfile, error: profileError } = await supabase
+    .from('profiles')
+    .select('email')
+    .eq('id', userId)
+    .single()
+
+  if (profileError || !creatorProfile) {
+    console.error('Error getting creator profile:', profileError)
+    return NextResponse.json({ error: 'Failed to identify company owner' }, { status: 500 })
+  }
+
+  // Find the admin member by matching email with company creator
+  const { data: adminMember, error: memberError } = await supabase
+    .from('company_members')
+    .select('id, credit_balance')
+    .eq('company_id', companyId)
+    .eq('email', creatorProfile.email)
+    .single()
+
+  if (memberError || !adminMember) {
+    console.error('Error finding admin member:', memberError)
+    return NextResponse.json({ error: 'Admin member not found in cap table' }, { status: 404 })
+  }
+
+  // Refund the session fee to the admin member
+  const currentBalance = adminMember.credit_balance || 0
+  const refundedBalance = currentBalance + activeSession.session_fee
+
+  const { error: refundError } = await supabase
+    .from('company_members')
+    .update({ credit_balance: refundedBalance })
+    .eq('id', adminMember.id)
+
+  if (refundError) {
+    console.error('Error refunding session fee:', refundError)
+    return NextResponse.json({ error: 'Failed to process refund' }, { status: 500 })
+  }
+
+  // Cancel the session
+  const { error: cancelError } = await supabase
+    .from('cap_table_sessions')
+    .update({
+      is_active: false,
+      cancelled_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', activeSession.id)
+
+  if (cancelError) {
+    console.error('Error cancelling session:', cancelError)
+    
+    // Rollback the refund
+    await supabase
+      .from('company_members')
+      .update({ credit_balance: currentBalance })
+      .eq('id', adminMember.id)
+    
+    return NextResponse.json({ error: 'Failed to cancel cap table session' }, { status: 500 })
+  }
+
+  return NextResponse.json({
+    message: 'Cap table session cancelled successfully',
+    session_id: activeSession.id,
+    refunded_amount: activeSession.session_fee,
+    new_balance: refundedBalance
   })
 }

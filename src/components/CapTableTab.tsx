@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import AddMemberModal from './AddMemberModal'
 import EditMemberModal from './EditMemberModal'
@@ -33,9 +33,10 @@ interface SessionData {
 
 interface CapTableTabProps {
   companyId: string
+  onSessionStateChange?: (isActive: boolean) => void
 }
 
-export default function CapTableTab({ companyId }: CapTableTabProps) {
+export default function CapTableTab({ companyId, onSessionStateChange }: CapTableTabProps) {
   const [members, setMembers] = useState<CapTableMember[]>([])
   const [companyData, setCompanyData] = useState<CompanyData | null>(null)
   const [ownerCreditBalance, setOwnerCreditBalance] = useState<number>(0)
@@ -62,12 +63,98 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
     isVisible: false
   })
 
+  // Ref to track if session cancellation is in progress
+  const sessionCancellationInProgress = useRef(false)
+
   useEffect(() => {
     if (companyId) {
       loadCapTableData()
       loadSessionData()
     }
   }, [companyId])
+
+  // Page Visibility API and session management
+  useEffect(() => {
+    if (!hasActiveSession) return
+
+    const handleVisibilityChange = () => {
+      if (document.hidden && hasActiveSession && !sessionCancellationInProgress.current) {
+        // User switched away from tab or minimized browser
+        handleSessionCancellation('Tab switched or browser minimized')
+      }
+    }
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (hasActiveSession && !sessionCancellationInProgress.current) {
+        // User is closing browser/tab
+        handleSessionCancellation('Browser/tab closed')
+        // Show confirmation dialog
+        event.preventDefault()
+        event.returnValue = 'You have an active cap table session. Are you sure you want to leave?'
+        return event.returnValue
+      }
+    }
+
+    const handleUnload = () => {
+      if (hasActiveSession && !sessionCancellationInProgress.current) {
+        // Final attempt to cancel session when page unloads
+        handleSessionCancellation('Page unloaded', true)
+      }
+    }
+
+    // Add event listeners
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    window.addEventListener('unload', handleUnload)
+
+    // Cleanup
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+      window.removeEventListener('unload', handleUnload)
+    }
+  }, [hasActiveSession, companyId])
+
+  const handleSessionCancellation = async (reason: string, isUnloading = false) => {
+    if (sessionCancellationInProgress.current) return
+    
+    sessionCancellationInProgress.current = true
+    
+    try {
+      const response = await fetch(`/api/companies/${companyId}/cap-table-session`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'cancel' }),
+        keepalive: isUnloading // Use keepalive for unload events
+      })
+
+      if (response.ok) {
+        const result = await response.json()
+        setHasActiveSession(false)
+        setSessionData(null)
+        
+        if (!isUnloading) {
+          showNotification('info', `Session cancelled: ${reason}. Refunded $${result.refunded_amount?.toFixed(2) || '20.00'}`)
+          // Reload data to update credit balance
+          await loadSessionData()
+        }
+      } else {
+        console.error('Failed to cancel session:', await response.text())
+        if (!isUnloading) {
+          showNotification('error', 'Failed to cancel session automatically')
+        }
+      }
+    } catch (error) {
+      console.error('Error cancelling session:', error)
+      if (!isUnloading) {
+        showNotification('error', 'Failed to cancel session automatically')
+      }
+    } finally {
+      sessionCancellationInProgress.current = false
+    }
+  }
 
   const loadCapTableData = async () => {
     setLoading(true)
@@ -180,6 +267,11 @@ export default function CapTableTab({ companyId }: CapTableTabProps) {
         const data = await response.json()
         setSessionData(data.session)
         setHasActiveSession(data.has_active_session)
+        
+        // Notify parent component of session state change
+        if (onSessionStateChange) {
+          onSessionStateChange(data.has_active_session)
+        }
         
         // Update owner credit balance from the API response
         if (data.company && data.company.owner_credit_balance !== undefined) {
