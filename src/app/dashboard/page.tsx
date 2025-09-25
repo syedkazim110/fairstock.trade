@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
+import BrandedNavigation from '@/components/BrandedNavigation'
 
 export default function DashboardPage() {
   const [user, setUser] = useState<any>(null)
@@ -73,30 +74,25 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Navigation */}
-      <nav className="bg-white shadow">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
-              <h1 className="text-xl font-semibold text-gray-900">FairStock</h1>
-            </div>
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-700">
-                Welcome, {profile?.full_name || user.email}
-              </span>
-              <button
-                onClick={handleLogout}
-                disabled={loggingOut}
-                className="bg-gray-200 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed px-3 py-2 rounded-md text-sm font-medium text-gray-700 flex items-center space-x-2"
-              >
-                {loggingOut && (
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
-                )}
-                <span>{loggingOut ? 'Signing out...' : 'Sign out'}</span>
-              </button>
-            </div>
+      <BrandedNavigation 
+        rightContent={
+          <div className="flex items-center space-x-4">
+            <span className="text-sm font-medium bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 bg-clip-text text-transparent">
+              Welcome, {profile?.full_name || user.email}
+            </span>
+            <button
+              onClick={handleLogout}
+              disabled={loggingOut}
+              className="bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-700 hover:via-indigo-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed px-3 py-2 rounded-md text-sm font-medium text-white flex items-center space-x-2 transition-all duration-300 shadow-md hover:shadow-lg"
+            >
+              {loggingOut && (
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+              )}
+              <span>{loggingOut ? 'Signing out...' : 'Sign out'}</span>
+            </button>
           </div>
-        </div>
-      </nav>
+        }
+      />
 
       <div className="flex">
         {/* Sidebar */}

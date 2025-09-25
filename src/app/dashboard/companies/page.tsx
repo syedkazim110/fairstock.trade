@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useRouter, useSearchParams } from 'next/navigation'
 import CompanyDetailsModal from '@/components/CompanyDetailsModal'
 import CompanyManageInterface from '@/components/CompanyManageInterface'
+import BrandedNavigation from '@/components/BrandedNavigation'
 
 interface Company {
   id: string
@@ -172,23 +173,10 @@ export default function CompaniesPage() {
     return (
       <div className="min-h-screen bg-gray-50">
         {/* Navigation */}
-        <nav className="bg-white shadow">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between h-16">
-              <div className="flex items-center">
-                <button
-                  onClick={() => router.push('/dashboard')}
-                  className="mr-4 text-gray-400 hover:text-gray-600"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                  </svg>
-                </button>
-                <h1 className="text-xl font-semibold text-gray-900">My Companies</h1>
-              </div>
-            </div>
-          </div>
-        </nav>
+        <BrandedNavigation 
+          title="My Companies"
+          showBackButton={true}
+        />
 
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="flex justify-center items-center h-64">
@@ -202,31 +190,18 @@ export default function CompaniesPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Navigation */}
-      <nav className="bg-white shadow">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
-              <button
-                onClick={() => router.push('/dashboard')}
-                className="mr-4 text-gray-400 hover:text-gray-600"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
-              </button>
-              <h1 className="text-xl font-semibold text-gray-900">My Companies</h1>
-            </div>
-            <div className="flex items-center">
-              <button
-                onClick={() => router.push('/dashboard/create-company')}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium"
-              >
-                Create New Company
-              </button>
-            </div>
-          </div>
-        </div>
-      </nav>
+      <BrandedNavigation 
+        title="My Companies"
+        showBackButton={true}
+        rightContent={
+          <button
+            onClick={() => router.push('/dashboard/create-company')}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium"
+          >
+            Create New Company
+          </button>
+        }
+      />
 
       {/* Success Message */}
       {showSuccess && (
