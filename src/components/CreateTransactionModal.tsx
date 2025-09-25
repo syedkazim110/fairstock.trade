@@ -49,11 +49,71 @@ export default function CreateTransactionModal({
   // Form state
   const [transactionType, setTransactionType] = useState('')
   const [amount, setAmount] = useState('')
+  const [amountDisplay, setAmountDisplay] = useState('')
   const [shareQuantity, setShareQuantity] = useState('')
+  const [shareQuantityDisplay, setShareQuantityDisplay] = useState('')
   const [fromMember, setFromMember] = useState('')
   const [toMember, setToMember] = useState('')
   const [description, setDescription] = useState('')
   const [errors, setErrors] = useState<Record<string, string>>({})
+
+  // Utility functions for number formatting
+  const formatNumberWithCommas = (value: string): string => {
+    // Remove any existing commas and non-numeric characters except decimal point
+    const cleanValue = value.replace(/[^\d.]/g, '')
+    
+    // Split by decimal point
+    const parts = cleanValue.split('.')
+    
+    // Add commas to the integer part
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+    
+    // Rejoin with decimal point if it exists
+    return parts.join('.')
+  }
+
+  const removeCommas = (value: string): string => {
+    return value.replace(/,/g, '')
+  }
+
+  const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const inputValue = e.target.value
+    const cleanValue = removeCommas(inputValue)
+    
+    // Update the clean value for validation and submission
+    setAmount(cleanValue)
+    
+    // Update the formatted display value
+    if (cleanValue === '') {
+      setAmountDisplay('')
+    } else {
+      setAmountDisplay(formatNumberWithCommas(cleanValue))
+    }
+    
+    // Clear any existing errors
+    setErrors({ ...errors, amount: '' })
+  }
+
+  const handleShareQuantityChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const inputValue = e.target.value
+    const cleanValue = removeCommas(inputValue)
+    
+    // For shares, we only want integers, so remove any decimal points
+    const integerValue = cleanValue.replace(/\./g, '')
+    
+    // Update the clean value for validation and submission
+    setShareQuantity(integerValue)
+    
+    // Update the formatted display value
+    if (integerValue === '') {
+      setShareQuantityDisplay('')
+    } else {
+      setShareQuantityDisplay(formatNumberWithCommas(integerValue))
+    }
+    
+    // Clear any existing errors
+    setErrors({ ...errors, shareQuantity: '' })
+  }
 
   useEffect(() => {
     if (isOpen && companyId) {
@@ -106,7 +166,9 @@ export default function CreateTransactionModal({
   const resetForm = () => {
     setTransactionType('')
     setAmount('')
+    setAmountDisplay('')
     setShareQuantity('')
+    setShareQuantityDisplay('')
     setFromMember('')
     setToMember('')
     setDescription('')
@@ -293,14 +355,9 @@ export default function CreateTransactionModal({
                   Amount ($) *
                 </label>
                 <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={amount}
-                  onChange={(e) => {
-                    setAmount(e.target.value)
-                    setErrors({ ...errors, amount: '' })
-                  }}
+                  type="text"
+                  value={amountDisplay}
+                  onChange={handleAmountChange}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   placeholder="0.00"
                 />
@@ -317,13 +374,9 @@ export default function CreateTransactionModal({
                   Share Quantity *
                 </label>
                 <input
-                  type="number"
-                  min="1"
-                  value={shareQuantity}
-                  onChange={(e) => {
-                    setShareQuantity(e.target.value)
-                    setErrors({ ...errors, shareQuantity: '' })
-                  }}
+                  type="text"
+                  value={shareQuantityDisplay}
+                  onChange={handleShareQuantityChange}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   placeholder="Number of shares"
                 />
