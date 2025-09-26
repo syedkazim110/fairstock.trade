@@ -105,57 +105,49 @@ export default function CompaniesPage() {
   }, [searchParams])
 
   const loadData = async () => {
-    const supabase = createClient()
-    
     try {
-      // Get current user
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) {
-        router.push('/auth/login')
-        return
-      }
-      setUser(user)
+      // Use the optimized API endpoint instead of direct database calls
+      const response = await fetch('/api/companies', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      })
 
-      // Load countries and states for display
-      const [countriesRes, statesRes] = await Promise.all([
-        supabase.from('countries').select('code, name').order('name'),
-        supabase.from('states').select('code, name, country_code').order('name')
-      ])
+      if (!response.ok) {
+        if (response.status === 401) {
+          router.push('/auth/login')
+          return
+        }
+        throw new Error('Failed to fetch companies')
+      }
+
+      const data = await response.json()
       
-      if (countriesRes.data && statesRes.data) {
-        setCountryStateData({
-          countries: countriesRes.data,
-          states: statesRes.data
-        })
+      // Set companies data (already includes member counts from API)
+      const companiesWithMembers = data.companies.map((company: any) => ({
+        ...company,
+        company_members: Array(company.member_count).fill({}) // Create array for compatibility
+      }))
+      
+      setCompanies(companiesWithMembers)
+      
+      // Set country/state data from API response
+      if (data.countryStateData) {
+        setCountryStateData(data.countryStateData)
       }
 
-      // Use the new view that handles both owned and member companies
-      const { data: companiesData, error } = await supabase
-        .from('user_accessible_companies')
-        .select('*')
-        .order('created_at', { ascending: false })
-
-      if (error) {
-        console.error('Error fetching companies:', error)
-      } else {
-        // For each company, get the member count
-        const companiesWithMembers = await Promise.all(
-          (companiesData || []).map(async (company) => {
-            const { data: members } = await supabase
-              .from('company_members')
-              .select('id')
-              .eq('company_id', company.id)
-            
-            return {
-              ...company,
-              company_members: members || []
-            }
-          })
-        )
-        setCompanies(companiesWithMembers)
+      // Get user info for display (still needed for UI)
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        setUser(user)
       }
+
     } catch (error) {
       console.error('Error loading data:', error)
+      // Fallback to login if there's an auth error
+      router.push('/auth/login')
     } finally {
       setLoading(false)
     }

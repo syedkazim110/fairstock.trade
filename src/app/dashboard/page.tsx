@@ -2,7 +2,7 @@
 
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import BrandedNavigation from '@/components/BrandedNavigation'
 
 export default function DashboardPage() {
@@ -11,11 +11,20 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [loggingOut, setLoggingOut] = useState(false)
   const router = useRouter()
-  const supabase = createClient()
+  
+  // OPTIMIZED: Create supabase client once and memoize it
+  const supabase = useMemo(() => createClient(), [])
 
-  useEffect(() => {
-    const getUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+  // OPTIMIZED: Use useCallback to prevent unnecessary re-renders
+  const getUser = useCallback(async () => {
+    try {
+      // OPTIMIZED: Parallel queries instead of sequential
+      const [userResult, profileResult] = await Promise.all([
+        supabase.auth.getUser(),
+        supabase.from('profiles').select('*').limit(1).maybeSingle()
+      ])
+
+      const { data: { user } } = userResult
       
       if (!user) {
         router.push('/auth/login')
@@ -24,19 +33,27 @@ export default function DashboardPage() {
 
       setUser(user)
 
-      // Get user profile
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single()
-
-      setProfile(profile)
+      // Only fetch profile if we have a user and don't already have profile data
+      if (user && !profile) {
+        const { data: userProfile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', user.id)
+          .single()
+        
+        setProfile(userProfile)
+      }
+    } catch (error) {
+      console.error('Error fetching user data:', error)
+      router.push('/auth/login')
+    } finally {
       setLoading(false)
     }
+  }, [router, supabase, profile])
 
+  useEffect(() => {
     getUser()
-  }, [router, supabase])
+  }, [getUser])
 
   const handleLogout = async () => {
     setLoggingOut(true)
