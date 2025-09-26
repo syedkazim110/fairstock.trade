@@ -65,6 +65,10 @@ export default function CapTableTab({ companyId, onSessionStateChange }: CapTabl
 
   // Ref to track if session cancellation is in progress
   const sessionCancellationInProgress = useRef(false)
+  
+  // Track changes made during the session
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const [sessionStartTime, setSessionStartTime] = useState<Date | null>(null)
 
   useEffect(() => {
     if (companyId) {
@@ -73,61 +77,116 @@ export default function CapTableTab({ companyId, onSessionStateChange }: CapTabl
     }
   }, [companyId])
 
-  // Page Visibility API and session management
+  // Enhanced Page Visibility API and session management
   useEffect(() => {
-    if (!hasActiveSession) return
+    if (!hasActiveSession) {
+      // Reset change tracking when session ends
+      setHasUnsavedChanges(false)
+      setSessionStartTime(null)
+      return
+    }
+
+    // Set session start time when session becomes active
+    if (hasActiveSession && !sessionStartTime) {
+      setSessionStartTime(new Date())
+    }
+
+    console.log('Setting up session event listeners', { hasActiveSession, hasUnsavedChanges })
 
     const handleVisibilityChange = () => {
+      console.log('Visibility change detected:', { 
+        hidden: document.hidden, 
+        hasActiveSession, 
+        hasUnsavedChanges,
+        cancellationInProgress: sessionCancellationInProgress.current 
+      })
+      
       if (document.hidden && hasActiveSession && !sessionCancellationInProgress.current) {
         // User switched away from tab or minimized browser
-        handleSessionCancellation('Tab switched or browser minimized')
+        handleSmartSessionTermination('Tab switched or browser minimized')
+      }
+    }
+
+    const handleFocusChange = () => {
+      console.log('Focus change detected:', { 
+        hasFocus: document.hasFocus(), 
+        hasActiveSession, 
+        hasUnsavedChanges 
+      })
+      
+      if (!document.hasFocus() && hasActiveSession && !sessionCancellationInProgress.current) {
+        // Additional check for when window loses focus
+        setTimeout(() => {
+          if (!document.hasFocus() && hasActiveSession && !sessionCancellationInProgress.current) {
+            handleSmartSessionTermination('Window lost focus')
+          }
+        }, 1000) // Small delay to avoid false positives
       }
     }
 
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       if (hasActiveSession && !sessionCancellationInProgress.current) {
         // User is closing browser/tab
-        handleSessionCancellation('Browser/tab closed')
-        // Show confirmation dialog
-        event.preventDefault()
-        event.returnValue = 'You have an active cap table session. Are you sure you want to leave?'
-        return event.returnValue
+        handleSmartSessionTermination('Browser/tab closed', true)
+        
+        // Show confirmation dialog if there are unsaved changes
+        if (hasUnsavedChanges) {
+          event.preventDefault()
+          event.returnValue = 'You have unsaved changes in your cap table session. Are you sure you want to leave?'
+          return event.returnValue
+        } else {
+          event.preventDefault()
+          event.returnValue = 'You have an active cap table session. Are you sure you want to leave?'
+          return event.returnValue
+        }
       }
     }
 
     const handleUnload = () => {
       if (hasActiveSession && !sessionCancellationInProgress.current) {
-        // Final attempt to cancel session when page unloads
-        handleSessionCancellation('Page unloaded', true)
+        // Final attempt to terminate session when page unloads
+        handleSmartSessionTermination('Page unloaded', true)
       }
     }
 
-    // Add event listeners
+    // Add multiple event listeners for better coverage
     document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('blur', handleFocusChange)
     window.addEventListener('beforeunload', handleBeforeUnload)
     window.addEventListener('unload', handleUnload)
 
     // Cleanup
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('blur', handleFocusChange)
       window.removeEventListener('beforeunload', handleBeforeUnload)
       window.removeEventListener('unload', handleUnload)
     }
-  }, [hasActiveSession, companyId])
+  }, [hasActiveSession, hasUnsavedChanges, companyId, sessionStartTime])
 
-  const handleSessionCancellation = async (reason: string, isUnloading = false) => {
+  // Smart session termination based on whether changes were made
+  const handleSmartSessionTermination = async (reason: string, isUnloading = false) => {
     if (sessionCancellationInProgress.current) return
     
     sessionCancellationInProgress.current = true
     
+    console.log('Smart session termination triggered:', { 
+      reason, 
+      hasUnsavedChanges, 
+      isUnloading,
+      sessionStartTime 
+    })
+    
     try {
-      // Use the new optimized endpoint
+      // Decide whether to complete or cancel based on changes
+      const action = hasUnsavedChanges ? 'complete' : 'cancel'
+      
       const response = await fetch(`/api/companies/${companyId}/cap-table-data`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ action: 'cancel' }),
+        body: JSON.stringify({ action }),
         keepalive: isUnloading // Use keepalive for unload events
       })
 
@@ -137,27 +196,48 @@ export default function CapTableTab({ companyId, onSessionStateChange }: CapTabl
         // Optimistic update
         setHasActiveSession(false)
         setSessionData(null)
-        setOwnerCreditBalance(result.new_balance || ownerCreditBalance + 20)
+        setHasUnsavedChanges(false)
+        setSessionStartTime(null)
+        
+        if (action === 'cancel') {
+          setOwnerCreditBalance(result.new_balance || ownerCreditBalance + 20)
+          if (!isUnloading) {
+            showNotification('info', `Session cancelled: ${reason}. No changes made - refunded $${result.refunded_amount?.toFixed(2) || '20.00'}`)
+          }
+        } else {
+          if (!isUnloading) {
+            showNotification('success', `Session completed: ${reason}. Changes saved and charged $20.00`)
+          }
+        }
+        
+        // Notify parent component
+        if (onSessionStateChange) {
+          onSessionStateChange(false)
+        }
         
         if (!isUnloading) {
-          showNotification('info', `Session cancelled: ${reason}. Refunded $${result.refunded_amount?.toFixed(2) || '20.00'}`)
           // Reload data to get the latest state
           await loadCapTableData()
         }
       } else {
-        console.error('Failed to cancel session:', await response.text())
+        console.error('Failed to terminate session:', await response.text())
         if (!isUnloading) {
-          showNotification('error', 'Failed to cancel session automatically')
+          showNotification('error', 'Failed to terminate session automatically')
         }
       }
     } catch (error) {
-      console.error('Error cancelling session:', error)
+      console.error('Error terminating session:', error)
       if (!isUnloading) {
-        showNotification('error', 'Failed to cancel session automatically')
+        showNotification('error', 'Failed to terminate session automatically')
       }
     } finally {
       sessionCancellationInProgress.current = false
     }
+  }
+
+  // Legacy function for backward compatibility
+  const handleSessionCancellation = async (reason: string, isUnloading = false) => {
+    return handleSmartSessionTermination(reason, isUnloading)
   }
 
   const loadCapTableData = async () => {
@@ -230,18 +310,30 @@ export default function CapTableTab({ companyId, onSessionStateChange }: CapTabl
     return new Intl.NumberFormat('en-US').format(shares)
   }
 
-  // Handler functions with retry mechanism
+  // Handler functions with retry mechanism and change tracking
   const handleMemberAdded = async () => {
+    // Mark that changes have been made
+    setHasUnsavedChanges(true)
+    console.log('Member added - marking changes as unsaved')
+    
     await loadCapTableDataWithRetry()
     showNotification('success', 'Member added successfully!')
   }
 
   const handleMemberUpdated = async () => {
+    // Mark that changes have been made
+    setHasUnsavedChanges(true)
+    console.log('Member updated - marking changes as unsaved')
+    
     await loadCapTableDataWithRetry()
     showNotification('success', 'Member updated successfully!')
   }
 
   const handleMemberDeleted = async () => {
+    // Mark that changes have been made
+    setHasUnsavedChanges(true)
+    console.log('Member deleted - marking changes as unsaved')
+    
     await loadCapTableDataWithRetry()
     showNotification('success', 'Member deleted successfully!')
   }
@@ -389,6 +481,33 @@ export default function CapTableTab({ companyId, onSessionStateChange }: CapTabl
 
     return (
       <div className="space-y-6">
+        {/* Session Information Banner */}
+        {hasActiveSession && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <div className="flex items-start">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-3 flex-1">
+                <h3 className="text-sm font-medium text-blue-800">
+                  Cap Table Session Active
+                </h3>
+                <div className="mt-2 text-sm text-blue-700">
+                  <p>
+                    Your session will automatically terminate if you switch tabs or close the browser. 
+                    {hasUnsavedChanges 
+                      ? " You have unsaved changes - you'll be charged $20.00 when the session ends."
+                      : " No changes made yet - you'll receive a full refund if the session ends without changes."
+                    }
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-4">
             <h3 className="text-lg font-medium text-gray-900">Cap Table</h3>
@@ -396,6 +515,12 @@ export default function CapTableTab({ companyId, onSessionStateChange }: CapTabl
               <div className="flex items-center space-x-2">
                 <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
                 <span className="text-sm text-green-600 font-medium">Session Active</span>
+                {hasUnsavedChanges && (
+                  <div className="flex items-center space-x-1">
+                    <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
+                    <span className="text-sm text-orange-600 font-medium">Unsaved Changes</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
