@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import FileUpload, { UploadedFile } from './FileUpload'
 
 interface Company {
   id: string
@@ -64,6 +65,7 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
   const [loading, setLoading] = useState(false)
   const [companyMembers, setCompanyMembers] = useState<any[]>([])
   const [companyDocuments, setCompanyDocuments] = useState<any[]>([])
+  const [uploadedDocument, setUploadedDocument] = useState<UploadedFile | null>(null)
   const supabase = createClient()
 
   const totalSteps = 5
@@ -95,6 +97,44 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
 
   const updateFormData = (updates: Partial<AuctionFormData>) => {
     setFormData(prev => ({ ...prev, ...updates }))
+  }
+
+  const handleFileUploaded = async (file: UploadedFile) => {
+    try {
+      // Save the document to the database
+      const { data: document, error } = await supabase
+        .from('company_documents')
+        .insert({
+          company_id: formData.companyId,
+          document_type: 'articles_of_incorporation',
+          file_name: file.file_name,
+          file_path: file.file_path,
+          file_size: file.file_size,
+          mime_type: file.mime_type,
+          uploaded_by: (await supabase.auth.getUser()).data.user?.id
+        })
+        .select()
+        .single()
+
+      if (error) {
+        console.error('Error saving document:', error)
+        return
+      }
+
+      // Update the uploaded document state and form data
+      setUploadedDocument(file)
+      updateFormData({ articlesDocumentId: document.id })
+      
+      // Reload company documents to show the new document
+      loadCompanyData()
+    } catch (error) {
+      console.error('Error handling file upload:', error)
+    }
+  }
+
+  const handleFileRemoved = () => {
+    setUploadedDocument(null)
+    updateFormData({ articlesDocumentId: '' })
   }
 
   const calculatePricePreview = () => {
@@ -160,7 +200,7 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
       case 1:
         return formData.marketingComplianceAccepted
       case 2:
-        return formData.companyId && (formData.articlesDocumentId || companyDocuments.length === 0)
+        return formData.companyId
       case 3:
         return formData.title && formData.sharesCount > 0 && formData.maxPrice > 0 && formData.minPrice > 0 && formData.maxPrice > formData.minPrice
       case 4:
@@ -231,32 +271,44 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Articles of Incorporation</label>
                   {companyDocuments.length > 0 ? (
-                    <div className="space-y-2">
-                      {companyDocuments.map(doc => (
-                        <label key={doc.id} className="flex items-center space-x-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50">
-                          <input
-                            type="radio"
-                            name="articlesDocument"
-                            value={doc.id}
-                            checked={formData.articlesDocumentId === doc.id}
-                            onChange={(e) => updateFormData({ articlesDocumentId: e.target.value })}
-                            className="h-4 w-4 text-indigo-600 focus:ring-indigo-500"
-                          />
-                          <div>
-                            <p className="text-sm font-medium text-gray-900">{doc.file_name}</p>
-                            <p className="text-xs text-gray-500">Uploaded {new Date(doc.created_at).toLocaleDateString()}</p>
-                          </div>
-                        </label>
-                      ))}
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        {companyDocuments.map(doc => (
+                          <label key={doc.id} className="flex items-center space-x-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50">
+                            <input
+                              type="radio"
+                              name="articlesDocument"
+                              value={doc.id}
+                              checked={formData.articlesDocumentId === doc.id}
+                              onChange={(e) => updateFormData({ articlesDocumentId: e.target.value })}
+                              className="h-4 w-4 text-indigo-600 focus:ring-indigo-500"
+                            />
+                            <div>
+                              <p className="text-sm font-medium text-gray-900">{doc.file_name}</p>
+                              <p className="text-xs text-gray-500">Uploaded {new Date(doc.created_at).toLocaleDateString()}</p>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="border-t border-gray-200 pt-4">
+                        <p className="text-sm text-gray-600 mb-3">Or upload a new document:</p>
+                        <FileUpload
+                          onFileUploaded={handleFileUploaded}
+                          onFileRemoved={handleFileRemoved}
+                          documentType="articles_of_incorporation"
+                          label=""
+                          existingFile={uploadedDocument}
+                        />
+                      </div>
                     </div>
                   ) : (
-                    <div className="text-center py-6 border-2 border-dashed border-gray-300 rounded-lg">
-                      <svg className="w-8 h-8 text-gray-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
-                      <p className="text-sm text-gray-600">No articles of incorporation found</p>
-                      <p className="text-xs text-gray-500 mt-1">You can proceed without this document, but it's recommended to upload it later</p>
-                    </div>
+                    <FileUpload
+                      onFileUploaded={handleFileUploaded}
+                      onFileRemoved={handleFileRemoved}
+                      documentType="articles_of_incorporation"
+                      label=""
+                      existingFile={uploadedDocument}
+                    />
                   )}
                 </div>
               )}

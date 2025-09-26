@@ -10,6 +10,10 @@ interface Auction {
   description: string
   status: string
   created_at: string
+  articles_document_id?: string
+  shares_count?: number
+  max_price?: number
+  min_price?: number
 }
 
 interface Company {
@@ -26,6 +30,8 @@ export default function AuctionsTab({ companyId }: AuctionsTabProps) {
   const [loading, setLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [companies, setCompanies] = useState<Company[]>([])
+  const [selectedAuction, setSelectedAuction] = useState<Auction | null>(null)
+  const [auctionDocument, setAuctionDocument] = useState<any>(null)
 
   useEffect(() => {
     if (companyId) {
@@ -78,6 +84,55 @@ export default function AuctionsTab({ companyId }: AuctionsTabProps) {
 
   const handleCreateAuctionSuccess = () => {
     loadAuctions() // Reload auctions after successful creation
+  }
+
+  const handleViewAuctionDetails = async (auction: Auction) => {
+    const supabase = createClient()
+    
+    try {
+      // Get full auction details including articles_document_id
+      const { data: auctionData, error: auctionError } = await supabase
+        .from('company_auctions')
+        .select('*')
+        .eq('id', auction.id)
+        .single()
+
+      if (auctionError) {
+        console.error('Error fetching auction details:', auctionError)
+        return
+      }
+
+      setSelectedAuction(auctionData)
+
+      // If there's an articles document, load it
+      if (auctionData.articles_document_id) {
+        const { data: documentData, error: documentError } = await supabase
+          .from('company_documents')
+          .select('*')
+          .eq('id', auctionData.articles_document_id)
+          .single()
+
+        if (documentError) {
+          console.error('Error fetching document:', documentError)
+        } else {
+          // Get the public URL for the document
+          const { data: { publicUrl } } = supabase.storage
+            .from('company-documents')
+            .getPublicUrl(documentData.file_path)
+
+          setAuctionDocument({ ...documentData, url: publicUrl })
+        }
+      } else {
+        setAuctionDocument(null)
+      }
+    } catch (error) {
+      console.error('Error loading auction details:', error)
+    }
+  }
+
+  const closeAuctionDetails = () => {
+    setSelectedAuction(null)
+    setAuctionDocument(null)
   }
 
   const formatDate = (dateString: string) => {
@@ -161,7 +216,10 @@ export default function AuctionsTab({ companyId }: AuctionsTabProps) {
               </div>
               
               <div className="mt-4 flex justify-end space-x-2">
-                <button className="text-indigo-600 hover:text-indigo-800 text-sm font-medium">
+                <button 
+                  onClick={() => handleViewAuctionDetails(auction)}
+                  className="text-indigo-600 hover:text-indigo-800 text-sm font-medium"
+                >
                   View Details
                 </button>
                 <button className="text-gray-600 hover:text-gray-800 text-sm font-medium">
@@ -181,6 +239,131 @@ export default function AuctionsTab({ companyId }: AuctionsTabProps) {
           onSuccess={handleCreateAuctionSuccess}
           preselectedCompanyId={companyId}
         />
+      )}
+
+      {/* Auction Details Modal */}
+      {selectedAuction && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-gray-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-semibold text-gray-900">{selectedAuction.title}</h2>
+                  <p className="text-sm text-gray-600">Auction Details</p>
+                </div>
+                <button
+                  onClick={closeAuctionDetails}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="px-6 py-6 max-h-[70vh] overflow-y-auto">
+              <div className="space-y-6">
+                {/* Auction Information */}
+                <div className="bg-gray-50 rounded-lg p-6">
+                  <h3 className="text-lg font-medium text-gray-900 mb-4">Auction Information</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="text-sm text-gray-500">Status:</span>
+                      <p className="font-medium">
+                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(selectedAuction.status)}`}>
+                          {selectedAuction.status.charAt(0).toUpperCase() + selectedAuction.status.slice(1)}
+                        </span>
+                      </p>
+                    </div>
+                    <div>
+                      <span className="text-sm text-gray-500">Created:</span>
+                      <p className="font-medium">{formatDate(selectedAuction.created_at)}</p>
+                    </div>
+                    {selectedAuction.shares_count && (
+                      <div>
+                        <span className="text-sm text-gray-500">Shares:</span>
+                        <p className="font-medium">{selectedAuction.shares_count.toLocaleString()}</p>
+                      </div>
+                    )}
+                    {selectedAuction.max_price && selectedAuction.min_price && (
+                      <div>
+                        <span className="text-sm text-gray-500">Price Range:</span>
+                        <p className="font-medium">${selectedAuction.min_price} - ${selectedAuction.max_price}</p>
+                      </div>
+                    )}
+                  </div>
+                  {selectedAuction.description && (
+                    <div className="mt-4">
+                      <span className="text-sm text-gray-500">Description:</span>
+                      <p className="font-medium mt-1">{selectedAuction.description}</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Documents Section */}
+                {auctionDocument && (
+                  <div className="bg-blue-50 rounded-lg p-6">
+                    <h3 className="text-lg font-medium text-gray-900 mb-4">Documents</h3>
+                    <div className="border border-gray-300 rounded-lg p-4 bg-white">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-3">
+                          <div className="flex-shrink-0">
+                            <svg className="h-8 w-8 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                            </svg>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-900 truncate">
+                              {auctionDocument.file_name}
+                            </p>
+                            <p className="text-sm text-gray-500">
+                              Articles of Incorporation • {Math.round(auctionDocument.file_size / 1024)} KB
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <a
+                            href={auctionDocument.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium"
+                          >
+                            View Document
+                          </a>
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-sm text-blue-800 mt-3">
+                      <strong>Note:</strong> This document is available to all invited members of this auction.
+                    </p>
+                  </div>
+                )}
+
+                {!auctionDocument && (
+                  <div className="bg-gray-50 rounded-lg p-6 text-center">
+                    <svg className="w-12 h-12 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <p className="text-gray-600">No documents attached to this auction</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 border-t border-gray-200 flex justify-end">
+              <button
+                onClick={closeAuctionDetails}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
