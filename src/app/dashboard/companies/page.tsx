@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useRouter, useSearchParams } from 'next/navigation'
 import CompanyDetailsModal from '@/components/CompanyDetailsModal'
 import CompanyManageInterface from '@/components/CompanyManageInterface'
+import DeleteCompanyDialog from '@/components/DeleteCompanyDialog'
 import BrandedNavigation from '@/components/BrandedNavigation'
 
 interface Company {
@@ -16,6 +17,7 @@ interface Company {
   business_structure: string
   created_at: string
   created_by: string
+  user_role: string
 }
 
 interface CompanyMember {
@@ -75,6 +77,16 @@ export default function CompaniesPage() {
     companyId: '',
     companyName: ''
   })
+
+  const [deleteDialog, setDeleteDialog] = useState<{
+    isOpen: boolean
+    company: Company | null
+  }>({
+    isOpen: false,
+    company: null
+  })
+
+  const [openDropdown, setOpenDropdown] = useState<string | null>(null)
 
   useEffect(() => {
     loadData()
@@ -168,6 +180,29 @@ export default function CompaniesPage() {
       day: 'numeric'
     })
   }
+
+  const handleCompanyDeleted = () => {
+    // Reload the companies list after deletion
+    loadData()
+    setDeleteDialog({ isOpen: false, company: null })
+  }
+
+  const handleDeleteCompany = (company: Company) => {
+    setDeleteDialog({ isOpen: true, company })
+    setOpenDropdown(null)
+  }
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = () => {
+      setOpenDropdown(null)
+    }
+    
+    if (openDropdown) {
+      document.addEventListener('click', handleClickOutside)
+      return () => document.removeEventListener('click', handleClickOutside)
+    }
+  }, [openDropdown])
 
   if (loading) {
     return (
@@ -271,11 +306,11 @@ export default function CompaniesPage() {
                     </div>
                     <div className="flex-shrink-0">
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        (company as any).user_role === 'owner'
+                        company.user_role === 'owner'
                           ? 'bg-green-100 text-green-800' 
                           : 'bg-blue-100 text-blue-800'
                       }`}>
-                        {(company as any).user_role === 'owner' ? 'Owner' : 'Member'}
+                        {company.user_role === 'owner' ? 'Owner' : 'Member'}
                       </span>
                     </div>
                   </div>
@@ -298,7 +333,7 @@ export default function CompaniesPage() {
                       <div className="text-sm text-gray-600">
                         {(company as any).company_members?.length || 0} member(s)
                       </div>
-                      <div className="flex space-x-2">
+                      <div className="flex items-center space-x-2">
                         <button 
                           onClick={() => setDetailsModal({
                             isOpen: true,
@@ -309,17 +344,50 @@ export default function CompaniesPage() {
                         >
                           View Details
                         </button>
-                        {(company as any).user_role === 'owner' && (
-                          <button 
-                            onClick={() => setManageInterface({
-                              isOpen: true,
-                              companyId: company.id,
-                              companyName: company.name
-                            })}
-                            className="text-gray-600 hover:text-gray-800 text-sm font-medium"
-                          >
-                            Manage
-                          </button>
+                        {company.user_role === 'owner' && (
+                          <>
+                            <button 
+                              onClick={() => setManageInterface({
+                                isOpen: true,
+                                companyId: company.id,
+                                companyName: company.name
+                              })}
+                              className="text-gray-600 hover:text-gray-800 text-sm font-medium"
+                            >
+                              Manage
+                            </button>
+                            
+                            {/* Actions Dropdown */}
+                            <div className="relative">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setOpenDropdown(openDropdown === company.id ? null : company.id)
+                                }}
+                                className="text-gray-400 hover:text-gray-600 p-1"
+                              >
+                                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                  <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+                                </svg>
+                              </button>
+                              
+                              {openDropdown === company.id && (
+                                <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-10 border border-gray-200">
+                                  <div className="py-1">
+                                    <button
+                                      onClick={() => handleDeleteCompany(company)}
+                                      className="flex items-center w-full px-4 py-2 text-sm text-red-700 hover:bg-red-50 hover:text-red-900"
+                                    >
+                                      <svg className="w-4 h-4 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                      </svg>
+                                      Delete Company
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </>
                         )}
                       </div>
                     </div>
@@ -349,6 +417,14 @@ export default function CompaniesPage() {
           />
         </div>
       )}
+
+      {/* Delete Company Dialog */}
+      <DeleteCompanyDialog
+        isOpen={deleteDialog.isOpen}
+        company={deleteDialog.company}
+        onClose={() => setDeleteDialog({ isOpen: false, company: null })}
+        onCompanyDeleted={handleCompanyDeleted}
+      />
     </div>
   )
 }
