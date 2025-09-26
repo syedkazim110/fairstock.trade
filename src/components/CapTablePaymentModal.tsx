@@ -37,7 +37,7 @@ export default function CapTablePaymentModal({
     const supabase = createClient()
 
     try {
-      const response = await fetch(`/api/companies/${companyId}/cap-table-session`, {
+      const response = await fetch(`/api/companies/${companyId}/cap-table-data`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

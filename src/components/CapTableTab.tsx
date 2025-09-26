@@ -121,7 +121,8 @@ export default function CapTableTab({ companyId, onSessionStateChange }: CapTabl
     sessionCancellationInProgress.current = true
     
     try {
-      const response = await fetch(`/api/companies/${companyId}/cap-table-session`, {
+      // Use the new optimized endpoint
+      const response = await fetch(`/api/companies/${companyId}/cap-table-data`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -132,13 +133,16 @@ export default function CapTableTab({ companyId, onSessionStateChange }: CapTabl
 
       if (response.ok) {
         const result = await response.json()
+        
+        // Optimistic update
         setHasActiveSession(false)
         setSessionData(null)
+        setOwnerCreditBalance(result.new_balance || ownerCreditBalance + 20)
         
         if (!isUnloading) {
           showNotification('info', `Session cancelled: ${reason}. Refunded $${result.refunded_amount?.toFixed(2) || '20.00'}`)
-          // Reload data to update credit balance
-          await loadSessionData()
+          // Reload data to get the latest state
+          await loadCapTableData()
         }
       } else {
         console.error('Failed to cancel session:', await response.text())
@@ -159,136 +163,56 @@ export default function CapTableTab({ companyId, onSessionStateChange }: CapTabl
   const loadCapTableData = async () => {
     setLoading(true)
     setError(null)
-    const supabase = createClient()
     
     try {
-      // Get the current user to identify the owner
-      const { data: { user }, error: userError } = await supabase.auth.getUser()
-      if (userError || !user) {
-        setError('Failed to identify user')
-        return
+      // Use the new optimized endpoint that gets all data in one call
+      const response = await fetch(`/api/companies/${companyId}/cap-table-data`)
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to load cap table data')
       }
 
-      // Get user profile to get their email
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('email')
-        .eq('id', user.id)
-        .single()
-
-      if (profileError || !profile) {
-        setError('Failed to load user profile')
-        return
-      }
-
-      // First, get company data including share information
-      const { data: company, error: companyError } = await supabase
-        .from('companies')
-        .select('name, total_shares, issued_shares')
-        .eq('id', companyId)
-        .single()
-
-      if (companyError) {
-        console.error('Error fetching company data:', companyError)
-        setError('Failed to load company data')
-        return
-      }
-
-      setCompanyData(company)
-
-      // Get company members with credit balance
-      const { data: membersData, error: membersError } = await supabase
-        .from('company_members')
-        .select('id, name, email, position, credit_balance')
-        .eq('company_id', companyId)
-        .order('name')
-
-      if (membersError) {
-        console.error('Error fetching company members:', membersError)
-        setError('Failed to load company members')
-        return
-      }
-
-      if (!membersData || membersData.length === 0) {
-        setMembers([])
-        setOwnerCreditBalance(0)
-        return
-      }
-
-      // Find the owner member by matching email
-      const ownerMember = membersData.find(member => member.email === profile.email)
-      if (ownerMember) {
-        setOwnerCreditBalance(ownerMember.credit_balance || 0)
-      } else {
-        setOwnerCreditBalance(0)
-      }
-
-      // Get shareholding data
-      const memberEmails = membersData.map(member => member.email)
-      const { data: shareholdingsData, error: shareholdingsError } = await supabase
-        .from('member_shareholdings')
-        .select('member_email, shares_owned, share_percentage')
-        .eq('company_id', companyId)
-        .in('member_email', memberEmails)
-
-      if (shareholdingsError) {
-        console.error('Error fetching shareholdings data:', shareholdingsError)
-      }
-
-      // Transform and combine the data
-      const transformedMembers: CapTableMember[] = membersData.map(member => {
-        // Find shareholding for this member
-        const shareholding = shareholdingsData?.find(sh => sh.member_email === member.email)
-
-        return {
-          id: member.id,
-          name: member.name,
-          email: member.email,
-          position: member.position,
-          balance: member.credit_balance || 0, // Use credit_balance from company_members table
-          shares_owned: shareholding?.shares_owned || 0,
-          share_percentage: shareholding?.share_percentage || 0
-        }
+      const data = await response.json()
+      
+      // Update all state from the single API response
+      setCompanyData({
+        name: data.company.name,
+        total_shares: data.company.total_shares,
+        issued_shares: data.company.issued_shares
       })
+      
+      setMembers(data.members || [])
+      setOwnerCreditBalance(data.company.owner_credit_balance || 0)
+      setSessionData(data.session)
+      setHasActiveSession(data.has_active_session)
+      
+      // Notify parent component of session state change
+      if (onSessionStateChange) {
+        onSessionStateChange(data.has_active_session)
+      }
 
-      setMembers(transformedMembers)
+      // Log performance metadata if available
+      if (data._metadata) {
+        console.log('Cap table data loaded:', {
+          cached: data._metadata.cached,
+          optimized: data._metadata.optimized,
+          timestamp: data._metadata.timestamp
+        })
+      }
+
     } catch (error) {
       console.error('Error loading cap table data:', error)
-      setError('Failed to load cap table data')
+      setError(error instanceof Error ? error.message : 'Failed to load cap table data')
     } finally {
       setLoading(false)
     }
   }
 
   const loadSessionData = async () => {
-    try {
-      const response = await fetch(`/api/companies/${companyId}/cap-table-session`)
-      if (response.ok) {
-        const data = await response.json()
-        setSessionData(data.session)
-        setHasActiveSession(data.has_active_session)
-        
-        // Notify parent component of session state change
-        if (onSessionStateChange) {
-          onSessionStateChange(data.has_active_session)
-        }
-        
-        // Update owner credit balance from the API response
-        if (data.company && data.company.owner_credit_balance !== undefined) {
-          setOwnerCreditBalance(data.company.owner_credit_balance)
-        }
-        
-        // Update company data
-        if (data.company && companyData) {
-          setCompanyData(prev => prev ? {
-            ...prev,
-            name: data.company.name
-          } : null)
-        }
-      }
-    } catch (error) {
-      console.error('Error loading session data:', error)
-    }
+    // Session data is now loaded as part of loadCapTableData
+    // This function is kept for backward compatibility but does nothing
+    return
   }
 
   const formatCurrency = (amount: number) => {
@@ -330,7 +254,8 @@ export default function CapTableTab({ companyId, onSessionStateChange }: CapTabl
 
   const handleCompleteSession = async () => {
     try {
-      const response = await fetch(`/api/companies/${companyId}/cap-table-session`, {
+      // Use the new optimized endpoint
+      const response = await fetch(`/api/companies/${companyId}/cap-table-data`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -339,8 +264,19 @@ export default function CapTableTab({ companyId, onSessionStateChange }: CapTabl
       })
 
       if (response.ok) {
-        await loadSessionData()
+        // Optimistic update
+        setHasActiveSession(false)
+        setSessionData(null)
+        
+        // Notify parent component
+        if (onSessionStateChange) {
+          onSessionStateChange(false)
+        }
+        
         showNotification('success', 'Cap table session completed!')
+        
+        // Reload data to get the latest state
+        await loadCapTableData()
       } else {
         const error = await response.json()
         showNotification('error', error.error || 'Failed to complete session')

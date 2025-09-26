@@ -71,7 +71,7 @@ export default function CompanyManageInterface({
 
   const checkActiveSession = async () => {
     try {
-      const response = await fetch(`/api/companies/${companyId}/cap-table-session`)
+      const response = await fetch(`/api/companies/${companyId}/cap-table-data`)
       if (response.ok) {
         const data = await response.json()
         setHasActiveSession(data.has_active_session)
@@ -87,7 +87,7 @@ export default function CompanyManageInterface({
     sessionCancellationInProgress.current = true
     
     try {
-      const response = await fetch(`/api/companies/${companyId}/cap-table-session`, {
+      const response = await fetch(`/api/companies/${companyId}/cap-table-data`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

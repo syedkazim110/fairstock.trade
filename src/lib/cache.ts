@@ -76,14 +76,17 @@ export const cacheKeys = {
   userProfile: (userId: string) => `user:${userId}:profile`,
 }
 
-// Cache TTL constants (in milliseconds)
+// Cache TTL constants (in milliseconds) - Optimized for cap table performance
 export const cacheTTL = {
-  short: 30000,    // 30 seconds - for frequently changing data
-  medium: 300000,  // 5 minutes - for moderately changing data
-  long: 1800000,   // 30 minutes - for rarely changing data
-  profile: 600000, // 10 minutes - for user profiles
-  capTableSession: 300000, // 5 minutes - for cap table sessions (optimized)
-  companyData: 600000, // 10 minutes - for company data that changes less frequently
+  short: 15000,    // 15 seconds - for real-time data like active sessions
+  medium: 120000,  // 2 minutes - for moderately changing data
+  long: 900000,    // 15 minutes - for rarely changing data
+  profile: 300000, // 5 minutes - for user profiles
+  capTableSession: 30000, // 30 seconds - for cap table sessions (real-time)
+  capTableData: 60000, // 1 minute - for complete cap table data
+  companyData: 300000, // 5 minutes - for company data
+  memberData: 120000, // 2 minutes - for member data
+  shareholdings: 300000, // 5 minutes - for shareholding data
 }
 
 // Utility function to wrap API calls with caching

@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextRequest, NextResponse } from 'next/server'
+import { invalidateCompaniesCache } from '../route'
 
 export async function DELETE(
   request: NextRequest,
@@ -49,6 +50,9 @@ export async function DELETE(
       console.error('No company was deleted - possibly due to RLS policies')
       return NextResponse.json({ error: 'Company could not be deleted - check permissions' }, { status: 500 })
     }
+
+    // Invalidate the companies cache for this user
+    await invalidateCompaniesCache(user.id)
 
     // Log the deletion for audit purposes
     console.log(`Company deleted: ${company.name} (${companyId}) by user ${user.id}`, {
