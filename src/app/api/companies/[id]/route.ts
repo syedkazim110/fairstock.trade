@@ -3,11 +3,12 @@ import { NextRequest, NextResponse } from 'next/server'
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params
     const supabase = await createClient()
-    const companyId = params.id
+    const companyId = id
 
     // Get current user
     const { data: { user }, error: userError } = await supabase.auth.getUser()
@@ -69,11 +70,12 @@ export async function DELETE(
 // GET method to retrieve company details (if needed)
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params
     const supabase = await createClient()
-    const companyId = params.id
+    const companyId = id
 
     // Get current user
     const { data: { user }, error: userError } = await supabase.auth.getUser()

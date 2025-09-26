@@ -4,9 +4,10 @@ import { emailService } from '@/lib/email/emailService'
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string; auctionId: string } }
+  { params }: { params: Promise<{ id: string; auctionId: string }> }
 ) {
   try {
+    const { id, auctionId } = await params
     const supabase = await createClient()
     
     // Get the authenticated user
@@ -20,7 +21,7 @@ export async function POST(
     const { data: company, error: companyError } = await supabase
       .from('companies')
       .select('id, name')
-      .eq('id', params.id)
+      .eq('id', id)
       .eq('created_by', user.id)
       .single()
 
@@ -32,8 +33,8 @@ export async function POST(
     const { data: auction, error: auctionError } = await supabase
       .from('company_auctions')
       .select('*')
-      .eq('id', params.auctionId)
-      .eq('company_id', params.id)
+      .eq('id', auctionId)
+      .eq('company_id', id)
       .single()
 
     if (auctionError || !auction) {
@@ -58,7 +59,7 @@ export async function POST(
         end_time: endTime.toISOString(),
         current_price: auction.max_price
       })
-      .eq('id', params.auctionId)
+      .eq('id', auctionId)
       .select()
       .single()
 

@@ -25,6 +25,8 @@ interface AuctionFormData {
   minPrice: number
   decreasingMinutes: number
   durationHours: number
+  auctionMode: 'traditional' | 'modified_dutch'
+  bidCollectionHours: number
   invitedMembers: string[]
   wireAccountName: string
   wireAccountNumber: string
@@ -45,6 +47,8 @@ const initialFormData: AuctionFormData = {
   minPrice: 0,
   decreasingMinutes: 15,
   durationHours: 24,
+  auctionMode: 'modified_dutch',
+  bidCollectionHours: 24,
   invitedMembers: [],
   wireAccountName: '',
   wireAccountNumber: '',
@@ -96,7 +100,20 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
   }
 
   const updateFormData = (updates: Partial<AuctionFormData>) => {
-    setFormData(prev => ({ ...prev, ...updates }))
+    setFormData(prev => {
+      const newData = { ...prev, ...updates }
+      
+      // If switching to modified_dutch, set decreasingMinutes to 0 since it's not used
+      if (updates.auctionMode === 'modified_dutch') {
+        newData.decreasingMinutes = 0
+      }
+      // If switching to traditional, set a default value if it's 0
+      else if (updates.auctionMode === 'traditional' && newData.decreasingMinutes === 0) {
+        newData.decreasingMinutes = 15
+      }
+      
+      return newData
+    })
   }
 
   const handleFileUploaded = async (file: UploadedFile) => {
@@ -168,6 +185,8 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
           min_price: formData.minPrice,
           decreasing_minutes: formData.decreasingMinutes,
           duration_hours: formData.durationHours,
+          auction_mode: formData.auctionMode,
+          bid_collection_hours: formData.bidCollectionHours,
           invited_members: formData.invitedMembers,
           wire_account_name: formData.wireAccountName,
           wire_account_number: formData.wireAccountNumber,
@@ -202,7 +221,9 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
       case 2:
         return formData.companyId
       case 3:
-        return formData.title && formData.sharesCount > 0 && formData.maxPrice > 0 && formData.minPrice > 0 && formData.maxPrice > formData.minPrice
+        // For traditional auctions, require decreasingMinutes; for modified dutch, it's not needed
+        const priceDropValid = formData.auctionMode === 'modified_dutch' || (formData.auctionMode === 'traditional' && formData.decreasingMinutes > 0)
+        return formData.title && formData.sharesCount > 0 && formData.maxPrice > 0 && formData.minPrice > 0 && formData.maxPrice > formData.minPrice && formData.durationHours > 0 && priceDropValid
       case 4:
         return formData.wireAccountName && formData.wireAccountNumber && formData.wireRoutingNumber && formData.wireBankName && formData.accreditedInvestorComplianceAccepted
       case 5:
@@ -357,7 +378,41 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
                 />
               </div>
 
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Auction Type</label>
+                <div className="space-y-3">
+                  <label className="flex items-start space-x-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50">
+                    <input
+                      type="radio"
+                      name="auctionMode"
+                      value="traditional"
+                      checked={formData.auctionMode === 'traditional'}
+                      onChange={(e) => updateFormData({ auctionMode: e.target.value as 'traditional' | 'modified_dutch' })}
+                      className="mt-1 h-4 w-4 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">Traditional Dutch Auction</p>
+                      <p className="text-xs text-gray-500">Price decreases over time. First bidder wins at current price.</p>
+                    </div>
+                  </label>
+                  <label className="flex items-start space-x-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50">
+                    <input
+                      type="radio"
+                      name="auctionMode"
+                      value="modified_dutch"
+                      checked={formData.auctionMode === 'modified_dutch'}
+                      onChange={(e) => updateFormData({ auctionMode: e.target.value as 'traditional' | 'modified_dutch' })}
+                      className="mt-1 h-4 w-4 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">Modified Dutch Auction (Uniform Clearing Price)</p>
+                      <p className="text-xs text-gray-500">Collect all bids, then calculate uniform clearing price. All winners pay the same price.</p>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div className={`grid gap-4 mb-6 ${formData.auctionMode === 'modified_dutch' ? 'grid-cols-1 md:grid-cols-3' : 'grid-cols-2 md:grid-cols-4'}`}>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Maximum Price ($)</label>
                   <input
@@ -381,7 +436,9 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
                 </div>
                 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Duration (hours)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    {formData.auctionMode === 'modified_dutch' ? 'Bid Collection Period (hours)' : 'Duration (hours)'}
+                  </label>
                   <input
                     type="number"
                     value={formData.durationHours || ''}
@@ -390,18 +447,20 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
                   />
                 </div>
                 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Price Drop Interval (min)</label>
-                  <input
-                    type="number"
-                    value={formData.decreasingMinutes || ''}
-                    onChange={(e) => updateFormData({ decreasingMinutes: parseInt(e.target.value) || 0 })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
+                {formData.auctionMode === 'traditional' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Price Drop Interval (min)</label>
+                    <input
+                      type="number"
+                      value={formData.decreasingMinutes || ''}
+                      onChange={(e) => updateFormData({ decreasingMinutes: parseInt(e.target.value) || 0 })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                )}
               </div>
 
-              {calculatePricePreview() && (
+              {formData.auctionMode === 'traditional' && calculatePricePreview() && (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                   <h4 className="font-medium text-blue-900 mb-2">Price Preview</h4>
                   <p className="text-sm text-blue-800">
@@ -413,30 +472,43 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
                 </div>
               )}
 
-              <div>
+              <div className="mt-6">
                 <label className="block text-sm font-medium text-gray-700 mb-2">Invite Members</label>
-                <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-200 rounded-md p-3">
-                  {companyMembers.map(member => (
-                    <label key={member.id} className="flex items-center space-x-3">
-                      <input
-                        type="checkbox"
-                        checked={formData.invitedMembers.includes(member.email)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            updateFormData({ invitedMembers: [...formData.invitedMembers, member.email] })
-                          } else {
-                            updateFormData({ invitedMembers: formData.invitedMembers.filter(email => email !== member.email) })
-                          }
-                        }}
-                        className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
-                      />
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">{member.name}</p>
-                        <p className="text-xs text-gray-500">{member.email} • {member.position}</p>
-                      </div>
-                    </label>
-                  ))}
-                </div>
+                {companyMembers.length === 0 ? (
+                  <div className="border border-gray-200 rounded-md p-4 text-center">
+                    <p className="text-sm text-gray-500">
+                      {formData.companyId ? 'No members found for this company. Add members to the company first.' : 'Please select a company to see available members.'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-200 rounded-md p-3">
+                    {companyMembers.map(member => (
+                      <label key={member.id} className="flex items-center space-x-3 p-2 hover:bg-gray-50 rounded">
+                        <input
+                          type="checkbox"
+                          checked={formData.invitedMembers.includes(member.email)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              updateFormData({ invitedMembers: [...formData.invitedMembers, member.email] })
+                            } else {
+                              updateFormData({ invitedMembers: formData.invitedMembers.filter(email => email !== member.email) })
+                            }
+                          }}
+                          className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                        />
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">{member.name}</p>
+                          <p className="text-xs text-gray-500">{member.email} • {member.position}</p>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                )}
+                {formData.invitedMembers.length > 0 && (
+                  <p className="text-xs text-gray-600 mt-2">
+                    {formData.invitedMembers.length} member{formData.invitedMembers.length !== 1 ? 's' : ''} selected
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -543,13 +615,17 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
                     <p className="font-medium">${formData.minPrice} - ${formData.maxPrice}</p>
                   </div>
                   <div>
-                    <span className="text-sm text-gray-500">Duration:</span>
+                    <span className="text-sm text-gray-500">
+                      {formData.auctionMode === 'modified_dutch' ? 'Bid Collection Period:' : 'Duration:'}
+                    </span>
                     <p className="font-medium">{formData.durationHours} hours</p>
                   </div>
-                  <div>
-                    <span className="text-sm text-gray-500">Price Decreases:</span>
-                    <p className="font-medium">Every {formData.decreasingMinutes} minutes</p>
-                  </div>
+                  {formData.auctionMode === 'traditional' && (
+                    <div>
+                      <span className="text-sm text-gray-500">Price Decreases:</span>
+                      <p className="font-medium">Every {formData.decreasingMinutes} minutes</p>
+                    </div>
+                  )}
                 </div>
                 
                 <div>

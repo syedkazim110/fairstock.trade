@@ -3,9 +3,10 @@ import { NextRequest, NextResponse } from 'next/server'
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params
     const supabase = await createClient()
     
     // Get the authenticated user
@@ -19,7 +20,7 @@ export async function GET(
     const { data: company, error: companyError } = await supabase
       .from('companies')
       .select('id')
-      .eq('id', params.id)
+      .eq('id', id)
       .eq('created_by', user.id)
       .single()
 
@@ -34,7 +35,7 @@ export async function GET(
         *,
         company:companies(name)
       `)
-      .eq('company_id', params.id)
+      .eq('company_id', id)
       .order('created_at', { ascending: false })
 
     if (auctionsError) {
@@ -51,9 +52,10 @@ export async function GET(
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params
     const supabase = await createClient()
     
     // Get the authenticated user
@@ -67,7 +69,7 @@ export async function POST(
     const { data: company, error: companyError } = await supabase
       .from('companies')
       .select('id')
-      .eq('id', params.id)
+      .eq('id', id)
       .eq('created_by', user.id)
       .single()
 
@@ -101,7 +103,7 @@ export async function POST(
 
     // Create the auction
     const auctionData = {
-      company_id: params.id,
+      company_id: id,
       title: body.title,
       description: body.description || '',
       auction_type: 'dutch',
