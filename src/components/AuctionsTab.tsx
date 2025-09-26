@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import CreateAuctionModal from './CreateAuctionModal'
 
 interface Auction {
   id: string
@@ -11,6 +12,11 @@ interface Auction {
   created_at: string
 }
 
+interface Company {
+  id: string
+  name: string
+}
+
 interface AuctionsTabProps {
   companyId: string
 }
@@ -18,10 +24,13 @@ interface AuctionsTabProps {
 export default function AuctionsTab({ companyId }: AuctionsTabProps) {
   const [auctions, setAuctions] = useState<Auction[]>([])
   const [loading, setLoading] = useState(true)
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [companies, setCompanies] = useState<Company[]>([])
 
   useEffect(() => {
     if (companyId) {
       loadAuctions()
+      loadCompanies()
     }
   }, [companyId])
 
@@ -46,6 +55,29 @@ export default function AuctionsTab({ companyId }: AuctionsTabProps) {
     } finally {
       setLoading(false)
     }
+  }
+
+  const loadCompanies = async () => {
+    const supabase = createClient()
+    
+    try {
+      const { data, error } = await supabase
+        .from('companies')
+        .select('id, name')
+        .order('name')
+
+      if (error) {
+        console.error('Error fetching companies:', error)
+      } else {
+        setCompanies(data || [])
+      }
+    } catch (error) {
+      console.error('Error loading companies:', error)
+    }
+  }
+
+  const handleCreateAuctionSuccess = () => {
+    loadAuctions() // Reload auctions after successful creation
   }
 
   const formatDate = (dateString: string) => {
@@ -83,7 +115,10 @@ export default function AuctionsTab({ companyId }: AuctionsTabProps) {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-medium text-gray-900">Auctions</h3>
-        <button className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium">
+        <button 
+          onClick={() => setShowCreateModal(true)}
+          className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium"
+        >
           Create Auction
         </button>
       </div>
@@ -97,7 +132,10 @@ export default function AuctionsTab({ companyId }: AuctionsTabProps) {
             <p className="text-lg font-medium text-gray-900">No Auctions Yet</p>
             <p className="text-sm text-gray-600 mt-2">Create your first auction to start trading company shares.</p>
           </div>
-          <button className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-md text-sm font-medium">
+          <button 
+            onClick={() => setShowCreateModal(true)}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-md text-sm font-medium"
+          >
             Create First Auction
           </button>
         </div>
@@ -133,6 +171,16 @@ export default function AuctionsTab({ companyId }: AuctionsTabProps) {
             </div>
           ))}
         </div>
+      )}
+
+      {/* Create Auction Modal */}
+      {showCreateModal && (
+        <CreateAuctionModal
+          companies={companies}
+          onClose={() => setShowCreateModal(false)}
+          onSuccess={handleCreateAuctionSuccess}
+          preselectedCompanyId={companyId}
+        />
       )}
     </div>
   )
