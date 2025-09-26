@@ -29,6 +29,7 @@ interface CompanyFormData {
 interface TreasuryFormData {
   total_shares: number
   par_value: number
+  par_value_input: string
   issued_shares: number
 }
 
@@ -36,11 +37,19 @@ interface Member {
   name: string
   email: string
   position: string
+  shares: string
 }
 
 interface DocumentsData {
   articles_of_incorporation: UploadedFile | null
   bylaws: UploadedFile | null
+}
+
+interface ShareholdingRecord {
+  company_id: string
+  member_email: string
+  shares_owned: number
+  share_percentage: number
 }
 
 const BUSINESS_STRUCTURES = [
@@ -93,12 +102,13 @@ export default function OnboardCompanyPage() {
   })
   
   const [members, setMembers] = useState<Member[]>([
-    { name: '', email: '', position: 'CEO' }
+    { name: '', email: '', position: 'CEO', shares: '' }
   ])
   
   const [treasuryData, setTreasuryData] = useState<TreasuryFormData>({
     total_shares: 0,
     par_value: 0.01,
+    par_value_input: '0.01',
     issued_shares: 0
   })
   
@@ -200,6 +210,8 @@ export default function OnboardCompanyPage() {
     }
     
     if (step === 3) {
+      let totalAllocatedShares = 0
+      
       members.forEach((member, index) => {
         if (!member.name.trim()) newErrors[`member_${index}_name`] = 'Name is required'
         if (!member.email.trim()) newErrors[`member_${index}_email`] = 'Email is required'
@@ -212,7 +224,22 @@ export default function OnboardCompanyPage() {
         if (member.position && !POSITIONS.includes(member.position)) {
           newErrors[`member_${index}_position`] = 'Invalid position selected'
         }
+        
+        // Validate shares
+        if (member.shares) {
+          const shareCount = parseFormattedNumber(member.shares)
+          if (shareCount < 0) {
+            newErrors[`member_${index}_shares`] = 'Shares cannot be negative'
+          } else {
+            totalAllocatedShares += shareCount
+          }
+        }
       })
+      
+      // Check if total allocated shares would exceed treasury shares from step 4
+      if (treasuryData.total_shares > 0 && totalAllocatedShares > treasuryData.total_shares) {
+        newErrors.total_allocated_shares = `Total allocated shares (${totalAllocatedShares.toLocaleString()}) cannot exceed total authorized shares (${treasuryData.total_shares.toLocaleString()})`
+      }
       
       // Check for duplicate emails
       const emailCounts = members.reduce((acc, member) => {
@@ -263,7 +290,7 @@ export default function OnboardCompanyPage() {
   }
 
   const addMember = () => {
-    setMembers(prev => [...prev, { name: '', email: '', position: 'CEO' }])
+    setMembers(prev => [...prev, { name: '', email: '', position: 'CEO', shares: '' }])
   }
 
   const removeMember = (index: number) => {
@@ -302,7 +329,9 @@ export default function OnboardCompanyPage() {
       // Create company
       const companyPayload = {
         ...companyData,
-        ...treasuryData,
+        total_shares: treasuryData.total_shares,
+        par_value: treasuryData.par_value,
+        issued_shares: treasuryData.issued_shares,
         created_by: user.id
       }
       
@@ -319,17 +348,61 @@ export default function OnboardCompanyPage() {
       
       // Create members
       const membersData = members.map(member => ({
-        ...member,
+        name: member.name,
+        email: member.email,
+        position: member.position,
         company_id: company.id
       }))
       
-      const { error: membersError } = await supabase
+      const { data: createdMembers, error: membersError } = await supabase
         .from('company_members')
         .insert(membersData)
+        .select()
       
       if (membersError) {
         console.error('Members creation error:', membersError)
         throw membersError
+      }
+
+      // Create shareholding records for members with shares
+      const shareholdingRecords: ShareholdingRecord[] = []
+      let totalMemberShares = 0
+      
+      members.forEach((member, index) => {
+        const shareCount = member.shares ? parseFormattedNumber(member.shares) : 0
+        if (shareCount > 0) {
+          const sharePercentage = company.total_shares ? (shareCount / company.total_shares) * 100 : 0
+          shareholdingRecords.push({
+            company_id: company.id,
+            member_email: member.email,
+            shares_owned: shareCount,
+            share_percentage: sharePercentage
+          })
+          totalMemberShares += shareCount
+        }
+      })
+
+      if (shareholdingRecords.length > 0) {
+        const { error: shareholdingError } = await supabase
+          .from('member_shareholdings')
+          .insert(shareholdingRecords)
+
+        if (shareholdingError) {
+          console.error('Shareholding creation error:', shareholdingError)
+          throw shareholdingError
+        }
+
+        // Update company issued shares to include member allocations
+        const updatedIssuedShares = treasuryData.issued_shares + totalMemberShares
+        const { error: updateCompanyError } = await supabase
+          .from('companies')
+          .update({ issued_shares: updatedIssuedShares })
+          .eq('id', company.id)
+
+        if (updateCompanyError) {
+          console.error('Failed to update company issued shares:', updateCompanyError)
+          throw updateCompanyError
+        }
       }
       
       // Save documents
@@ -631,7 +704,7 @@ export default function OnboardCompanyPage() {
                       )}
                     </div>
                     
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
                           Name *
@@ -668,7 +741,9 @@ export default function OnboardCompanyPage() {
                           <p className="mt-1 text-sm text-red-600">{errors[`member_${index}_email`]}</p>
                         )}
                       </div>
+                    </div>
 
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
                           Position *
@@ -690,6 +765,30 @@ export default function OnboardCompanyPage() {
                           <p className="mt-1 text-sm text-red-600">{errors[`member_${index}_position`]}</p>
                         )}
                       </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Initial Shares (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          value={member.shares}
+                          onChange={(e) => {
+                            const formatted = formatNumberWithCommas(e.target.value)
+                            updateMember(index, 'shares', formatted)
+                          }}
+                          className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 ${
+                            errors[`member_${index}_shares`] ? 'border-red-300' : 'border-gray-300'
+                          }`}
+                          placeholder="0"
+                        />
+                        <p className="mt-1 text-xs text-gray-500">
+                          Number of shares to allocate to this member
+                        </p>
+                        {errors[`member_${index}_shares`] && (
+                          <p className="mt-1 text-sm text-red-600">{errors[`member_${index}_shares`]}</p>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -703,6 +802,56 @@ export default function OnboardCompanyPage() {
                   </svg>
                   Add Another Member
                 </button>
+
+                {/* Share Allocation Summary */}
+                {(() => {
+                  const totalAllocatedShares = members.reduce((total, member) => {
+                    return total + (member.shares ? parseFormattedNumber(member.shares) : 0)
+                  }, 0)
+                  
+                  if (totalAllocatedShares > 0 || treasuryData.total_shares > 0) {
+                    return (
+                      <div className="bg-blue-50 rounded-lg p-4 mt-4">
+                        <h3 className="text-md font-medium text-gray-700 mb-2">Share Allocation Summary</h3>
+                        <div className="text-sm text-gray-600 space-y-1">
+                          <div className="flex justify-between">
+                            <span>Total Allocated to Members:</span>
+                            <span className="font-medium">{totalAllocatedShares.toLocaleString()} shares</span>
+                          </div>
+                          {treasuryData.total_shares > 0 && (
+                            <>
+                              <div className="flex justify-between">
+                                <span>Total Authorized Shares:</span>
+                                <span className="font-medium">{treasuryData.total_shares.toLocaleString()} shares</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>Remaining Available:</span>
+                                <span className={`font-medium ${
+                                  treasuryData.total_shares - totalAllocatedShares < 0 ? 'text-red-600' : 'text-green-600'
+                                }`}>
+                                  {(treasuryData.total_shares - totalAllocatedShares).toLocaleString()} shares
+                                </span>
+                              </div>
+                            </>
+                          )}
+                          {treasuryData.total_shares === 0 && (
+                            <p className="text-amber-600 text-xs mt-2">
+                              💡 Set total authorized shares in Step 4 to validate allocations
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  }
+                  return null
+                })()}
+
+                {/* Display total allocation error */}
+                {errors.total_allocated_shares && (
+                  <div className="bg-red-50 border border-red-200 rounded-md p-4 mt-4">
+                    <p className="text-sm text-red-600">{errors.total_allocated_shares}</p>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -744,11 +893,34 @@ export default function OnboardCompanyPage() {
                         Par Value *
                       </label>
                       <input
-                        type="number"
-                        min="0.0001"
-                        step="0.0001"
-                        value={treasuryData.par_value || ''}
-                        onChange={(e) => setTreasuryData(prev => ({ ...prev, par_value: parseFloat(e.target.value) || 0 }))}
+                        type="text"
+                        value={treasuryData.par_value_input}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          
+                          // Allow empty input
+                          if (value === '') {
+                            setTreasuryData(prev => ({ 
+                              ...prev, 
+                              par_value_input: '',
+                              par_value: 0 
+                            }));
+                            return;
+                          }
+                          
+                          // Only allow valid decimal number patterns
+                          const decimalPattern = /^(\d+\.?\d*|\.\d+)$/;
+                          if (decimalPattern.test(value)) {
+                            const numValue = parseFloat(value);
+                            if (!isNaN(numValue)) {
+                              setTreasuryData(prev => ({ 
+                                ...prev, 
+                                par_value_input: value,
+                                par_value: numValue 
+                              }));
+                            }
+                          }
+                        }}
                         className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 ${
                           errors.par_value ? 'border-red-300' : 'border-gray-300'
                         }`}
@@ -892,6 +1064,11 @@ export default function OnboardCompanyPage() {
                         <div>
                           <span className="font-medium">{member.name}</span>
                           <span className="text-gray-600 ml-2">({member.email})</span>
+                          {member.shares && parseFormattedNumber(member.shares) > 0 && (
+                            <span className="text-green-600 ml-2 text-xs">
+                              • {parseFormattedNumber(member.shares).toLocaleString()} shares
+                            </span>
+                          )}
                         </div>
                         <span className="bg-indigo-100 text-indigo-800 px-2 py-1 rounded text-xs">
                           {member.position}
