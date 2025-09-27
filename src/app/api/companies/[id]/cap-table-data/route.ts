@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { withCache, cacheKeys, cacheTTL, cache } from '@/lib/cache'
+import { withCache, cacheKeys, cacheTTL, getSessionCache } from '@/lib/cache'
 
 // Type definitions
 interface CompanyMember {
@@ -58,40 +58,36 @@ export async function GET(
     // Use optimized cache key for complete cap table data
     const cacheKey = `${cacheKeys.company(companyId)}:complete-data`
     
-    const capTableData = await withCache(
-      cacheKey,
-      async () => {
-        // Use the optimized database function to get all data in one call
-        const { data, error } = await supabase.rpc(
-          'get_complete_cap_table_data',
-          {
-            p_company_id: companyId,
-            p_user_id: user.id,
-            p_user_email: profile.email
-          }
-        )
-
-        if (error) {
-          console.error('Database function error:', error)
-          
-          // Fallback to original method if the optimized function doesn't exist
-          if (error.code === '42883') { // Function does not exist
-            return await getFallbackCapTableData(supabase, companyId, user.id, profile.email)
-          }
-          
-          throw new Error(error.message)
-        }
-
-        return data
-      },
-      cacheTTL.capTableData // Use optimized TTL for cap table data
+    // Fetch cap table data directly without caching to avoid cross-user issues
+    // Use the optimized database function to get all data in one call
+    const { data, error } = await supabase.rpc(
+      'get_complete_cap_table_data',
+      {
+        p_company_id: companyId,
+        p_user_id: user.id,
+        p_user_email: profile.email
+      }
     )
+
+    let capTableData
+    if (error) {
+      console.error('Database function error:', error)
+      
+      // Fallback to original method if the optimized function doesn't exist
+      if (error.code === '42883') { // Function does not exist
+        capTableData = await getFallbackCapTableData(supabase, companyId, user.id, profile.email)
+      } else {
+        throw new Error(error.message)
+      }
+    } else {
+      capTableData = data
+    }
 
     // Add performance metadata
     const responseData = {
       ...capTableData,
       _metadata: {
-        cached: cache.get(cacheKey) !== null,
+        cached: false, // No caching to prevent cross-user issues
         timestamp: new Date().toISOString(),
         optimized: true
       }
@@ -229,7 +225,21 @@ async function getFallbackCapTableData(supabase: any, companyId: string, userId:
   }
 }
 
-// POST /api/companies/[id]/cap-table-data - Optimized session management
+// Session termination context interface
+interface SessionTerminationContext {
+  reason: string
+  hasChanges: boolean
+  isUnloading: boolean
+  source: 'tab-switch' | 'visibility-change' | 'navigation' | 'manual'
+}
+
+// Smart session termination request interface
+interface SmartSessionTerminationRequest {
+  action: 'smart-terminate'
+  context: SessionTerminationContext
+}
+
+// POST /api/companies/[id]/cap-table-data - Enhanced session management with smart termination
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -246,12 +256,9 @@ export async function POST(
     const resolvedParams = await params
     const companyId = resolvedParams.id
     const body = await request.json()
-    const { action } = body
+    const { action, context } = body
 
-    // Clear cache for this company
-    const cacheKey = `${cacheKeys.company(companyId)}:complete-data`
-    cache.delete(cacheKey)
-    cache.delete(cacheKeys.capTableSession(companyId))
+    // No cache to clear since we're not using caching for user-specific data
 
     if (action === 'start') {
       return await startOptimizedSession(supabase, companyId, user.id)
@@ -259,8 +266,12 @@ export async function POST(
       return await completeOptimizedSession(supabase, companyId, user.id)
     } else if (action === 'cancel') {
       return await cancelOptimizedSession(supabase, companyId, user.id)
+    } else if (action === 'smart-terminate') {
+      return await handleSmartSessionTermination(supabase, companyId, user.id, context)
+    } else if (action === 'cleanup-orphaned') {
+      return await cleanupOrphanedSession(supabase, companyId, user.id)
     } else {
-      return NextResponse.json({ error: 'Invalid action. Use "start", "complete", or "cancel"' }, { status: 400 })
+      return NextResponse.json({ error: 'Invalid action. Use "start", "complete", "cancel", "smart-terminate", or "cleanup-orphaned"' }, { status: 400 })
     }
 
   } catch (error) {
@@ -271,6 +282,7 @@ export async function POST(
 
 async function startOptimizedSession(supabase: any, companyId: string, userId: string) {
   const sessionFee = 20.00
+  console.log('Starting session for company:', companyId, 'user:', userId, 'fee:', sessionFee)
 
   // Get user profile
   const { data: profile, error: profileError } = await supabase
@@ -280,8 +292,11 @@ async function startOptimizedSession(supabase: any, companyId: string, userId: s
     .single()
 
   if (profileError || !profile) {
+    console.error('Failed to get user profile:', profileError)
     return NextResponse.json({ error: 'Failed to identify user' }, { status: 500 })
   }
+
+  console.log('User profile found:', profile.email)
 
   // Find admin member
   const { data: adminMember, error: memberError } = await supabase
@@ -292,44 +307,61 @@ async function startOptimizedSession(supabase: any, companyId: string, userId: s
     .single()
 
   if (memberError || !adminMember) {
+    console.error('Admin member not found:', memberError)
     return NextResponse.json({ error: 'Admin member not found in cap table' }, { status: 404 })
   }
 
   const currentBalance = adminMember.credit_balance || 0
+  console.log('Admin member found:', { id: adminMember.id, currentBalance })
 
-  // Try to use optimized database function
-  const { data: result, error } = await supabase.rpc(
-    'start_cap_table_session_optimized',
-    {
-      p_company_id: companyId,
-      p_owner_id: userId,
-      p_admin_member_id: adminMember.id,
-      p_session_fee: sessionFee,
-      p_current_balance: currentBalance
-    }
-  )
-
-  if (error) {
-    console.error('Error in optimized session start:', error)
-    
-    // Fallback to original method if function doesn't exist
-    if (error.code === '42883') {
-      return await startSessionFallback(supabase, companyId, userId, adminMember, sessionFee, currentBalance)
-    }
-    
-    return NextResponse.json({ error: 'Failed to start cap table session' }, { status: 500 })
+  // Check if user has sufficient balance
+  if (currentBalance < sessionFee) {
+    console.log('Insufficient balance:', currentBalance, 'required:', sessionFee)
+    return NextResponse.json({ 
+      error: `Insufficient credit balance. You need $${sessionFee.toFixed(2)} but only have $${currentBalance.toFixed(2)}.` 
+    }, { status: 400 })
   }
 
-  return NextResponse.json({
-    message: 'Cap table session started successfully',
-    session: result.session,
-    admin_member_new_balance: result.new_balance,
-    session_fee: sessionFee,
-    optimized: true
-  }, { status: 201 })
+  // Skip optimized function and go directly to fallback for now to ensure it works
+  console.log('Using fallback method directly to ensure proper balance deduction')
+  return await startSessionFallback(supabase, companyId, userId, adminMember, sessionFee, currentBalance)
 }
 
 async function completeOptimizedSession(supabase: any, companyId: string, userId: string) {
+  console.log('Attempting to complete session for company:', companyId, 'user:', userId)
+  
+  // First check if there's an active session to complete
+  const { data: activeSession, error: sessionError } = await supabase
+    .from('cap_table_sessions')
+    .select('id, session_fee, is_active, cancelled_at, completed_at')
+    .eq('company_id', companyId)
+    .eq('owner_id', userId)
+    .eq('is_active', true)
+    .single()
+
+  if (sessionError) {
+    if (sessionError.code === 'PGRST116') {
+      console.log('No active session found - may have already been processed')
+      return NextResponse.json({ error: 'No active cap table session found' }, { status: 404 })
+    }
+    console.error('Error finding session:', sessionError)
+    return NextResponse.json({ error: 'Failed to find active session' }, { status: 500 })
+  }
+
+  console.log('Found active session:', { 
+    id: activeSession.id, 
+    fee: activeSession.session_fee,
+    isActive: activeSession.is_active,
+    cancelledAt: activeSession.cancelled_at,
+    completedAt: activeSession.completed_at
+  })
+
+  // Double-check that this session hasn't already been cancelled or completed
+  if (!activeSession.is_active || activeSession.cancelled_at || activeSession.completed_at) {
+    console.log('Session already processed, skipping completion')
+    return NextResponse.json({ error: 'Session has already been processed' }, { status: 400 })
+  }
+
   // Try optimized function first
   const { data: result, error } = await supabase.rpc(
     'complete_cap_table_session_optimized',
@@ -351,18 +383,17 @@ async function completeOptimizedSession(supabase: any, companyId: string, userId
           completed_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
         })
-        .eq('company_id', companyId)
-        .eq('owner_id', userId)
-        .eq('is_active', true)
+        .eq('id', activeSession.id)
+        .eq('is_active', true) // Only update if still active to prevent double processing
         .select('id')
         .single()
 
       if (updateError) {
-        if (updateError.code === 'PGRST116') {
-          return NextResponse.json({ error: 'No active cap table session found' }, { status: 404 })
-        }
+        console.error('Error updating session:', updateError)
         return NextResponse.json({ error: 'Failed to complete cap table session' }, { status: 500 })
       }
+
+      console.log('Session completed successfully:', { sessionId: updatedSession.id })
 
       return NextResponse.json({
         message: 'Cap table session completed successfully',
@@ -373,15 +404,18 @@ async function completeOptimizedSession(supabase: any, companyId: string, userId
     return NextResponse.json({ error: 'Failed to complete cap table session' }, { status: 500 })
   }
 
+  console.log('Session completed via optimized function')
   return NextResponse.json(result)
 }
 
 async function cancelOptimizedSession(supabase: any, companyId: string, userId: string) {
+  console.log('Attempting to cancel session for company:', companyId, 'user:', userId)
+  
   // Get session and admin member data
   const [sessionResult, profileResult] = await Promise.all([
     supabase
       .from('cap_table_sessions')
-      .select('id, session_fee')
+      .select('id, session_fee, is_active, cancelled_at, completed_at')
       .eq('company_id', companyId)
       .eq('owner_id', userId)
       .eq('is_active', true)
@@ -395,17 +429,34 @@ async function cancelOptimizedSession(supabase: any, companyId: string, userId: 
 
   if (sessionResult.error) {
     if (sessionResult.error.code === 'PGRST116') {
+      console.log('No active session found - may have already been processed')
       return NextResponse.json({ error: 'No active cap table session found' }, { status: 404 })
     }
+    console.error('Error finding session:', sessionResult.error)
     return NextResponse.json({ error: 'Failed to find active session' }, { status: 500 })
   }
 
   if (profileResult.error) {
+    console.error('Error finding profile:', profileResult.error)
     return NextResponse.json({ error: 'Failed to identify user' }, { status: 500 })
   }
 
   const activeSession = sessionResult.data
   const userEmail = profileResult.data.email
+
+  console.log('Found active session:', { 
+    id: activeSession.id, 
+    fee: activeSession.session_fee,
+    isActive: activeSession.is_active,
+    cancelledAt: activeSession.cancelled_at,
+    completedAt: activeSession.completed_at
+  })
+
+  // Double-check that this session hasn't already been cancelled or completed
+  if (!activeSession.is_active || activeSession.cancelled_at || activeSession.completed_at) {
+    console.log('Session already processed, skipping cancellation')
+    return NextResponse.json({ error: 'Session has already been processed' }, { status: 400 })
+  }
 
   // Find admin member
   const { data: adminMember, error: memberError } = await supabase
@@ -416,13 +467,20 @@ async function cancelOptimizedSession(supabase: any, companyId: string, userId: 
     .single()
 
   if (memberError || !adminMember) {
+    console.error('Admin member not found:', memberError)
     return NextResponse.json({ error: 'Admin member not found in cap table' }, { status: 404 })
   }
 
-  // Refund and cancel in parallel
   const currentBalance = adminMember.credit_balance || 0
   const refundedBalance = currentBalance + activeSession.session_fee
 
+  console.log('Processing refund:', { 
+    currentBalance, 
+    sessionFee: activeSession.session_fee, 
+    refundedBalance 
+  })
+
+  // Refund and cancel in parallel - but only if session is still active
   const [refundResult, cancelResult] = await Promise.all([
     supabase
       .from('company_members')
@@ -436,6 +494,7 @@ async function cancelOptimizedSession(supabase: any, companyId: string, userId: 
         updated_at: new Date().toISOString()
       })
       .eq('id', activeSession.id)
+      .eq('is_active', true) // Only update if still active to prevent double processing
   ])
 
   if (refundResult.error || cancelResult.error) {
@@ -443,8 +502,253 @@ async function cancelOptimizedSession(supabase: any, companyId: string, userId: 
     return NextResponse.json({ error: 'Failed to cancel cap table session' }, { status: 500 })
   }
 
+  console.log('Session cancelled successfully:', { 
+    sessionId: activeSession.id, 
+    refundAmount: activeSession.session_fee,
+    newBalance: refundedBalance 
+  })
+
   return NextResponse.json({
     message: 'Cap table session cancelled successfully',
+    session_id: activeSession.id,
+    refunded_amount: activeSession.session_fee,
+    new_balance: refundedBalance
+  })
+}
+
+// Smart session termination function - determines whether to complete or cancel based on changes
+async function handleSmartSessionTermination(supabase: any, companyId: string, userId: string, context: SessionTerminationContext) {
+  console.log('Smart session termination:', { companyId, userId, context })
+  
+  // First check if there's an active session
+  const { data: activeSession, error: sessionError } = await supabase
+    .from('cap_table_sessions')
+    .select('id, session_fee, is_active, cancelled_at, completed_at')
+    .eq('company_id', companyId)
+    .eq('owner_id', userId)
+    .eq('is_active', true)
+    .maybeSingle()
+
+  if (sessionError) {
+    console.error('Error finding session for smart termination:', sessionError)
+    return NextResponse.json({ 
+      error: 'Failed to find session',
+      context: context
+    }, { status: 500 })
+  }
+
+  if (!activeSession) {
+    console.log('No active session found for smart termination')
+    return NextResponse.json({
+      action_taken: 'no_action',
+      message: 'No active session found to terminate',
+      context: context
+    })
+  }
+
+  // Determine action based on whether changes were made
+  const action = context.hasChanges ? 'complete' : 'cancel'
+  
+  console.log(`Smart termination decision: ${action} (hasChanges: ${context.hasChanges})`)
+  
+  try {
+    if (action === 'complete') {
+      // Complete the session - charge the user (just mark as completed, don't refund)
+      const { data: updatedSession, error: updateError } = await supabase
+        .from('cap_table_sessions')
+        .update({
+          is_active: false,
+          completed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', activeSession.id)
+        .eq('is_active', true) // Only update if still active
+        .select('id')
+        .single()
+
+      if (updateError) {
+        console.error('Error completing session in smart termination:', updateError)
+        throw new Error('Failed to complete session')
+      }
+
+      return NextResponse.json({
+        action_taken: 'completed',
+        message: `Session completed: ${context.reason}. Changes were saved.`,
+        charged_amount: activeSession.session_fee,
+        new_balance: 0, // We don't track balance here
+        context: context
+      })
+    } else {
+      // Cancel the session - refund the user
+      const [profileResult] = await Promise.all([
+        supabase
+          .from('profiles')
+          .select('email')
+          .eq('id', userId)
+          .single()
+      ])
+
+      if (profileResult.error) {
+        console.error('Error finding profile for smart termination:', profileResult.error)
+        throw new Error('Failed to identify user')
+      }
+
+      const userEmail = profileResult.data.email
+
+      // Find admin member
+      const { data: adminMember, error: memberError } = await supabase
+        .from('company_members')
+        .select('id, credit_balance')
+        .eq('company_id', companyId)
+        .eq('email', userEmail)
+        .single()
+
+      if (memberError || !adminMember) {
+        console.error('Admin member not found for smart termination:', memberError)
+        throw new Error('Admin member not found')
+      }
+
+      const currentBalance = adminMember.credit_balance || 0
+      const refundedBalance = currentBalance + activeSession.session_fee
+
+      // Refund and cancel in parallel
+      const [refundResult, cancelResult] = await Promise.all([
+        supabase
+          .from('company_members')
+          .update({ credit_balance: refundedBalance })
+          .eq('id', adminMember.id),
+        supabase
+          .from('cap_table_sessions')
+          .update({
+            is_active: false,
+            cancelled_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', activeSession.id)
+          .eq('is_active', true) // Only update if still active
+      ])
+
+      if (refundResult.error || cancelResult.error) {
+        console.error('Error in smart termination cancellation:', { 
+          refundError: refundResult.error, 
+          cancelError: cancelResult.error 
+        })
+        throw new Error('Failed to cancel session')
+      }
+
+      return NextResponse.json({
+        action_taken: 'cancelled',
+        message: `Session cancelled: ${context.reason}. No changes were made.`,
+        refunded_amount: activeSession.session_fee,
+        new_balance: refundedBalance,
+        context: context
+      })
+    }
+  } catch (error) {
+    console.error('Error in smart session termination:', error)
+    return NextResponse.json({ 
+      error: 'Failed to terminate session',
+      context: context
+    }, { status: 500 })
+  }
+}
+
+// Clean up orphaned sessions - cancel and refund any active sessions
+async function cleanupOrphanedSession(supabase: any, companyId: string, userId: string) {
+  console.log('Cleaning up orphaned session for company:', companyId, 'user:', userId)
+  
+  // Find any active sessions for this company and user
+  const { data: activeSession, error: sessionError } = await supabase
+    .from('cap_table_sessions')
+    .select('id, session_fee, is_active, cancelled_at, completed_at')
+    .eq('company_id', companyId)
+    .eq('owner_id', userId)
+    .eq('is_active', true)
+    .maybeSingle()
+
+  if (sessionError) {
+    console.error('Error finding session for cleanup:', sessionError)
+    return NextResponse.json({ 
+      error: 'Failed to find session for cleanup'
+    }, { status: 500 })
+  }
+
+  if (!activeSession) {
+    console.log('No active session found to cleanup')
+    return NextResponse.json({
+      message: 'No active session found to cleanup',
+      cleaned_up: false
+    })
+  }
+
+  // Get user profile for email
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('email')
+    .eq('id', userId)
+    .single()
+
+  if (profileError || !profile) {
+    console.error('Error finding profile for cleanup:', profileError)
+    return NextResponse.json({ error: 'Failed to identify user' }, { status: 500 })
+  }
+
+  // Find admin member
+  const { data: adminMember, error: memberError } = await supabase
+    .from('company_members')
+    .select('id, credit_balance')
+    .eq('company_id', companyId)
+    .eq('email', profile.email)
+    .single()
+
+  if (memberError || !adminMember) {
+    console.error('Admin member not found for cleanup:', memberError)
+    return NextResponse.json({ error: 'Admin member not found in cap table' }, { status: 404 })
+  }
+
+  const currentBalance = adminMember.credit_balance || 0
+  const refundedBalance = currentBalance + activeSession.session_fee
+
+  console.log('Processing cleanup refund:', { 
+    currentBalance, 
+    sessionFee: activeSession.session_fee, 
+    refundedBalance 
+  })
+
+  // Refund and cancel the orphaned session
+  const [refundResult, cancelResult] = await Promise.all([
+    supabase
+      .from('company_members')
+      .update({ credit_balance: refundedBalance })
+      .eq('id', adminMember.id),
+    supabase
+      .from('cap_table_sessions')
+      .update({
+        is_active: false,
+        cancelled_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', activeSession.id)
+      .eq('is_active', true) // Only update if still active
+  ])
+
+  if (refundResult.error || cancelResult.error) {
+    console.error('Error in cleanup:', { 
+      refundError: refundResult.error, 
+      cancelError: cancelResult.error 
+    })
+    return NextResponse.json({ error: 'Failed to cleanup orphaned session' }, { status: 500 })
+  }
+
+  console.log('Orphaned session cleaned up successfully:', { 
+    sessionId: activeSession.id, 
+    refundAmount: activeSession.session_fee,
+    newBalance: refundedBalance 
+  })
+
+  return NextResponse.json({
+    message: 'Orphaned session cleaned up successfully',
+    cleaned_up: true,
     session_id: activeSession.id,
     refunded_amount: activeSession.session_fee,
     new_balance: refundedBalance

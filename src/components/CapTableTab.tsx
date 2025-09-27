@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useSessionManager } from '@/hooks/useSessionManager'
 import AddMemberModal from './AddMemberModal'
 import EditMemberModal from './EditMemberModal'
 import DeleteConfirmationDialog from './DeleteConfirmationDialog'
@@ -40,8 +41,6 @@ export default function CapTableTab({ companyId, onSessionStateChange }: CapTabl
   const [members, setMembers] = useState<CapTableMember[]>([])
   const [companyData, setCompanyData] = useState<CompanyData | null>(null)
   const [ownerCreditBalance, setOwnerCreditBalance] = useState<number>(0)
-  const [sessionData, setSessionData] = useState<SessionData | null>(null)
-  const [hasActiveSession, setHasActiveSession] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   
@@ -63,182 +62,27 @@ export default function CapTableTab({ companyId, onSessionStateChange }: CapTabl
     isVisible: false
   })
 
-  // Ref to track if session cancellation is in progress
-  const sessionCancellationInProgress = useRef(false)
-  
-  // Track changes made during the session
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
-  const [sessionStartTime, setSessionStartTime] = useState<Date | null>(null)
+  // Use centralized session manager
+  const sessionManager = useSessionManager({
+    companyId,
+    onSessionStateChange: (state) => {
+      if (onSessionStateChange) {
+        onSessionStateChange(state.isActive)
+      }
+    },
+    onNotification: (type, message) => {
+      showNotification(type, message)
+    }
+  })
+
+  const { sessionState, startSession, completeSession, markChanges, syncSessionState } = sessionManager
+  const { isActive: hasActiveSession, hasUnsavedChanges } = sessionState
 
   useEffect(() => {
     if (companyId) {
       loadCapTableData()
-      loadSessionData()
     }
   }, [companyId])
-
-  // Enhanced Page Visibility API and session management
-  useEffect(() => {
-    if (!hasActiveSession) {
-      // Reset change tracking when session ends
-      setHasUnsavedChanges(false)
-      setSessionStartTime(null)
-      return
-    }
-
-    // Set session start time when session becomes active
-    if (hasActiveSession && !sessionStartTime) {
-      setSessionStartTime(new Date())
-    }
-
-    console.log('Setting up session event listeners', { hasActiveSession, hasUnsavedChanges })
-
-    const handleVisibilityChange = () => {
-      console.log('Visibility change detected:', { 
-        hidden: document.hidden, 
-        hasActiveSession, 
-        hasUnsavedChanges,
-        cancellationInProgress: sessionCancellationInProgress.current 
-      })
-      
-      if (document.hidden && hasActiveSession && !sessionCancellationInProgress.current) {
-        // User switched away from tab or minimized browser
-        handleSmartSessionTermination('Tab switched or browser minimized')
-      }
-    }
-
-    const handleFocusChange = () => {
-      console.log('Focus change detected:', { 
-        hasFocus: document.hasFocus(), 
-        hasActiveSession, 
-        hasUnsavedChanges 
-      })
-      
-      if (!document.hasFocus() && hasActiveSession && !sessionCancellationInProgress.current) {
-        // Additional check for when window loses focus
-        setTimeout(() => {
-          if (!document.hasFocus() && hasActiveSession && !sessionCancellationInProgress.current) {
-            handleSmartSessionTermination('Window lost focus')
-          }
-        }, 1000) // Small delay to avoid false positives
-      }
-    }
-
-    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (hasActiveSession && !sessionCancellationInProgress.current) {
-        // User is closing browser/tab
-        handleSmartSessionTermination('Browser/tab closed', true)
-        
-        // Show confirmation dialog if there are unsaved changes
-        if (hasUnsavedChanges) {
-          event.preventDefault()
-          event.returnValue = 'You have unsaved changes in your cap table session. Are you sure you want to leave?'
-          return event.returnValue
-        } else {
-          event.preventDefault()
-          event.returnValue = 'You have an active cap table session. Are you sure you want to leave?'
-          return event.returnValue
-        }
-      }
-    }
-
-    const handleUnload = () => {
-      if (hasActiveSession && !sessionCancellationInProgress.current) {
-        // Final attempt to terminate session when page unloads
-        handleSmartSessionTermination('Page unloaded', true)
-      }
-    }
-
-    // Add multiple event listeners for better coverage
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-    window.addEventListener('blur', handleFocusChange)
-    window.addEventListener('beforeunload', handleBeforeUnload)
-    window.addEventListener('unload', handleUnload)
-
-    // Cleanup
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-      window.removeEventListener('blur', handleFocusChange)
-      window.removeEventListener('beforeunload', handleBeforeUnload)
-      window.removeEventListener('unload', handleUnload)
-    }
-  }, [hasActiveSession, hasUnsavedChanges, companyId, sessionStartTime])
-
-  // Smart session termination based on whether changes were made
-  const handleSmartSessionTermination = async (reason: string, isUnloading = false) => {
-    if (sessionCancellationInProgress.current) return
-    
-    sessionCancellationInProgress.current = true
-    
-    console.log('Smart session termination triggered:', { 
-      reason, 
-      hasUnsavedChanges, 
-      isUnloading,
-      sessionStartTime 
-    })
-    
-    try {
-      // Decide whether to complete or cancel based on changes
-      const action = hasUnsavedChanges ? 'complete' : 'cancel'
-      
-      const response = await fetch(`/api/companies/${companyId}/cap-table-data`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ action }),
-        keepalive: isUnloading // Use keepalive for unload events
-      })
-
-      if (response.ok) {
-        const result = await response.json()
-        
-        // Optimistic update
-        setHasActiveSession(false)
-        setSessionData(null)
-        setHasUnsavedChanges(false)
-        setSessionStartTime(null)
-        
-        if (action === 'cancel') {
-          setOwnerCreditBalance(result.new_balance || ownerCreditBalance + 20)
-          if (!isUnloading) {
-            showNotification('info', `Session cancelled: ${reason}. No changes made - refunded $${result.refunded_amount?.toFixed(2) || '20.00'}`)
-          }
-        } else {
-          if (!isUnloading) {
-            showNotification('success', `Session completed: ${reason}. Changes saved and charged $20.00`)
-          }
-        }
-        
-        // Notify parent component
-        if (onSessionStateChange) {
-          onSessionStateChange(false)
-        }
-        
-        if (!isUnloading) {
-          // Reload data to get the latest state
-          await loadCapTableData()
-        }
-      } else {
-        console.error('Failed to terminate session:', await response.text())
-        if (!isUnloading) {
-          showNotification('error', 'Failed to terminate session automatically')
-        }
-      }
-    } catch (error) {
-      console.error('Error terminating session:', error)
-      if (!isUnloading) {
-        showNotification('error', 'Failed to terminate session automatically')
-      }
-    } finally {
-      sessionCancellationInProgress.current = false
-    }
-  }
-
-  // Legacy function for backward compatibility
-  const handleSessionCancellation = async (reason: string, isUnloading = false) => {
-    return handleSmartSessionTermination(reason, isUnloading)
-  }
 
   const loadCapTableData = async () => {
     setLoading(true)
@@ -264,13 +108,9 @@ export default function CapTableTab({ companyId, onSessionStateChange }: CapTabl
       
       setMembers(data.members || [])
       setOwnerCreditBalance(data.company.owner_credit_balance || 0)
-      setSessionData(data.session)
-      setHasActiveSession(data.has_active_session)
       
-      // Notify parent component of session state change
-      if (onSessionStateChange) {
-        onSessionStateChange(data.has_active_session)
-      }
+      // Sync session state with centralized manager
+      await syncSessionState()
 
       // Log performance metadata if available
       if (data._metadata) {
@@ -310,69 +150,81 @@ export default function CapTableTab({ companyId, onSessionStateChange }: CapTabl
     return new Intl.NumberFormat('en-US').format(shares)
   }
 
-  // Handler functions with retry mechanism and change tracking
+  // Handler functions with centralized session management
   const handleMemberAdded = async () => {
-    // Mark that changes have been made
-    setHasUnsavedChanges(true)
-    console.log('Member added - marking changes as unsaved')
+    console.log('Member added - marking changes and refreshing data')
     
-    await loadCapTableDataWithRetry()
+    // Mark that changes have been made using centralized session manager
+    markChanges()
+    
+    // Force immediate data refresh
+    try {
+      setLoading(true)
+      await forceDataRefresh()
+      console.log('Data refresh completed after member added')
+    } catch (error) {
+      console.error('Failed to refresh data after member added:', error)
+      showNotification('error', 'Failed to refresh cap table data')
+    } finally {
+      setLoading(false)
+    }
+    
     showNotification('success', 'Member added successfully!')
   }
 
   const handleMemberUpdated = async () => {
-    // Mark that changes have been made
-    setHasUnsavedChanges(true)
-    console.log('Member updated - marking changes as unsaved')
+    console.log('Member updated - marking changes and refreshing data')
     
-    await loadCapTableDataWithRetry()
+    // Mark that changes have been made using centralized session manager
+    markChanges()
+    
+    // Force immediate data refresh
+    try {
+      setLoading(true)
+      await forceDataRefresh()
+      console.log('Data refresh completed after member updated')
+    } catch (error) {
+      console.error('Failed to refresh data after member updated:', error)
+      showNotification('error', 'Failed to refresh cap table data')
+    } finally {
+      setLoading(false)
+    }
+    
     showNotification('success', 'Member updated successfully!')
   }
 
   const handleMemberDeleted = async () => {
-    // Mark that changes have been made
-    setHasUnsavedChanges(true)
-    console.log('Member deleted - marking changes as unsaved')
+    console.log('Member deleted - marking changes and refreshing data')
     
-    await loadCapTableDataWithRetry()
+    // Mark that changes have been made using centralized session manager
+    markChanges()
+    
+    // Force immediate data refresh
+    try {
+      setLoading(true)
+      await forceDataRefresh()
+      console.log('Data refresh completed after member deleted')
+    } catch (error) {
+      console.error('Failed to refresh data after member deleted:', error)
+      showNotification('error', 'Failed to refresh cap table data')
+    } finally {
+      setLoading(false)
+    }
+    
     showNotification('success', 'Member deleted successfully!')
   }
 
   const handlePaymentSuccess = async () => {
     await loadCapTableDataWithRetry()
-    await loadSessionData()
+    await syncSessionState()
     showNotification('success', 'Cap table session started! You can now make changes.')
   }
 
   const handleCompleteSession = async () => {
     try {
-      // Use the new optimized endpoint
-      const response = await fetch(`/api/companies/${companyId}/cap-table-data`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ action: 'complete' })
-      })
-
-      if (response.ok) {
-        // Optimistic update
-        setHasActiveSession(false)
-        setSessionData(null)
-        
-        // Notify parent component
-        if (onSessionStateChange) {
-          onSessionStateChange(false)
-        }
-        
-        showNotification('success', 'Cap table session completed!')
-        
-        // Reload data to get the latest state
-        await loadCapTableData()
-      } else {
-        const error = await response.json()
-        showNotification('error', error.error || 'Failed to complete session')
-      }
+      await completeSession()
+      // Reload data to get the latest state
+      await loadCapTableData()
     } catch (error) {
       console.error('Error completing session:', error)
       showNotification('error', 'Failed to complete session')
@@ -384,6 +236,45 @@ export default function CapTableTab({ companyId, onSessionStateChange }: CapTabl
       action()
     } else {
       setShowPaymentModal(true)
+    }
+  }
+
+  // Force data refresh with aggressive retry and cache busting
+  const forceDataRefresh = async () => {
+    console.log('Force refreshing cap table data...')
+    
+    try {
+      // Add cache busting parameter to ensure fresh data
+      const timestamp = Date.now()
+      const response = await fetch(`/api/companies/${companyId}/cap-table-data?t=${timestamp}`)
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to load cap table data')
+      }
+
+      const data = await response.json()
+      
+      console.log('Fresh data received:', data)
+      
+      // Force update all state immediately
+      setCompanyData({
+        name: data.company.name,
+        total_shares: data.company.total_shares,
+        issued_shares: data.company.issued_shares
+      })
+      
+      setMembers([...data.members || []]) // Force array recreation
+      setOwnerCreditBalance(data.company.owner_credit_balance || 0)
+      
+      // Sync session state with centralized manager
+      await syncSessionState()
+
+      console.log('State updated with fresh data')
+      
+    } catch (error) {
+      console.error('Error in forceDataRefresh:', error)
+      throw error
     }
   }
 
@@ -496,11 +387,14 @@ export default function CapTableTab({ companyId, onSessionStateChange }: CapTabl
                 </h3>
                 <div className="mt-2 text-sm text-blue-700">
                   <p>
-                    Your session will automatically terminate if you switch tabs or close the browser. 
+                    Your session will automatically terminate after 3-5 seconds if you switch tabs or close the browser. 
                     {hasUnsavedChanges 
                       ? " You have unsaved changes - you'll be charged $20.00 when the session ends."
                       : " No changes made yet - you'll receive a full refund if the session ends without changes."
                     }
+                  </p>
+                  <p className="mt-1 text-xs">
+                    Quick tab switches are allowed - the session won't terminate immediately.
                   </p>
                 </div>
               </div>

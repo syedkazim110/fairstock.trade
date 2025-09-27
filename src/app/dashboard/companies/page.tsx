@@ -107,11 +107,17 @@ export default function CompaniesPage() {
   const loadData = async () => {
     try {
       // Use the optimized API endpoint instead of direct database calls
-      const response = await fetch('/api/companies', {
+      // Add cache-busting headers and timestamp to prevent stale data
+      const timestamp = new Date().getTime()
+      const response = await fetch(`/api/companies?t=${timestamp}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
         },
+        cache: 'no-store' // Prevent Next.js from caching this request
       })
 
       if (!response.ok) {
@@ -173,10 +179,13 @@ export default function CompaniesPage() {
     })
   }
 
-  const handleCompanyDeleted = () => {
-    // Reload the companies list after deletion
-    loadData()
+  const handleCompanyDeleted = (deletedCompany: Company) => {
+    // Optimistically remove the company from the UI immediately
+    setCompanies(prev => prev.filter(company => company.id !== deletedCompany.id))
     setDeleteDialog({ isOpen: false, company: null })
+    
+    // Also reload data in the background to ensure consistency
+    setTimeout(() => loadData(), 1000)
   }
 
   const handleDeleteCompany = (company: Company) => {

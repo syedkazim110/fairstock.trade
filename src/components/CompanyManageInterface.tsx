@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState } from 'react'
+import { useSessionManager } from '@/hooks/useSessionManager'
 import CapTableTab from './CapTableTab'
 import AuctionsTab from './AuctionsTab'
 import TransactionsTab from './TransactionsTab'
@@ -19,8 +20,6 @@ export default function CompanyManageInterface({
   onBack 
 }: CompanyManageInterfaceProps) {
   const [activeTab, setActiveTab] = useState<TabType>('cap-table')
-  const [hasActiveSession, setHasActiveSession] = useState(false)
-  const sessionCancellationInProgress = useRef(false)
 
   const tabs = [
     { id: 'cap-table' as TabType, name: 'Cap Table', icon: '📊' },
@@ -28,105 +27,36 @@ export default function CompanyManageInterface({
     { id: 'transactions' as TabType, name: 'Transactions', icon: '💰' }
   ]
 
-  // Check for active session on component mount
-  useEffect(() => {
-    checkActiveSession()
-  }, [companyId])
-
-  // Page Visibility API and session management
-  useEffect(() => {
-    if (!hasActiveSession) return
-
-    const handleVisibilityChange = () => {
-      if (document.hidden && hasActiveSession && !sessionCancellationInProgress.current) {
-        handleSessionCancellation('Tab switched or browser minimized')
-      }
+  // Use centralized session manager
+  const sessionManager = useSessionManager({
+    companyId,
+    onNotification: (type, message) => {
+      console.log(`Session notification: ${type} - ${message}`)
     }
+  })
 
-    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (hasActiveSession && !sessionCancellationInProgress.current) {
-        handleSessionCancellation('Browser/tab closed')
-        event.preventDefault()
-        event.returnValue = 'You have an active cap table session. Are you sure you want to leave?'
-        return event.returnValue
-      }
-    }
-
-    const handleUnload = () => {
-      if (hasActiveSession && !sessionCancellationInProgress.current) {
-        handleSessionCancellation('Page unloaded', true)
-      }
-    }
-
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-    window.addEventListener('beforeunload', handleBeforeUnload)
-    window.addEventListener('unload', handleUnload)
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-      window.removeEventListener('beforeunload', handleBeforeUnload)
-      window.removeEventListener('unload', handleUnload)
-    }
-  }, [hasActiveSession, companyId])
-
-  const checkActiveSession = async () => {
-    try {
-      const response = await fetch(`/api/companies/${companyId}/cap-table-data`)
-      if (response.ok) {
-        const data = await response.json()
-        setHasActiveSession(data.has_active_session)
-      }
-    } catch (error) {
-      console.error('Error checking session status:', error)
-    }
-  }
-
-  const handleSessionCancellation = async (reason: string, isUnloading = false) => {
-    if (sessionCancellationInProgress.current) return
-    
-    sessionCancellationInProgress.current = true
-    
-    try {
-      const response = await fetch(`/api/companies/${companyId}/cap-table-data`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ action: 'cancel' }),
-        keepalive: isUnloading
-      })
-
-      if (response.ok) {
-        setHasActiveSession(false)
-        if (!isUnloading) {
-          console.log(`Session cancelled: ${reason}`)
-        }
-      }
-    } catch (error) {
-      console.error('Error cancelling session:', error)
-    } finally {
-      sessionCancellationInProgress.current = false
-    }
-  }
+  const { sessionState, terminateSession } = sessionManager
+  const { isActive: hasActiveSession } = sessionState
 
   const handleTabChange = async (newTab: TabType) => {
-    // If switching away from cap-table tab and there's an active session, cancel it
+    // If switching away from cap-table tab and there's an active session, terminate it
     if (activeTab === 'cap-table' && newTab !== 'cap-table' && hasActiveSession) {
-      await handleSessionCancellation('Switched away from Cap Table tab')
+      await terminateSession('Switched away from Cap Table tab', 'tab-switch')
     }
     setActiveTab(newTab)
   }
 
   const handleBack = async () => {
-    // If there's an active session, cancel it before going back
+    // If there's an active session, terminate it before going back
     if (hasActiveSession) {
-      await handleSessionCancellation('Left company management interface')
+      await terminateSession('Left company management interface', 'navigation')
     }
     onBack()
   }
 
   const handleSessionStateChange = (isActive: boolean) => {
-    setHasActiveSession(isActive)
+    // This is handled by the centralized session manager now
+    console.log(`Session state changed: ${isActive}`)
   }
 
   const renderTabContent = () => {

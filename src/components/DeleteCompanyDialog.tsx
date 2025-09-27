@@ -10,6 +10,7 @@ interface Company {
   state_code: string
   business_structure: string
   created_at: string
+  created_by: string
   user_role: string
 }
 
@@ -17,7 +18,7 @@ interface DeleteCompanyDialogProps {
   isOpen: boolean
   onClose: () => void
   company: Company | null
-  onCompanyDeleted: () => void
+  onCompanyDeleted: (company: Company) => void
 }
 
 export default function DeleteCompanyDialog({ 
@@ -48,7 +49,7 @@ export default function DeleteCompanyDialog({
         throw new Error(result.error || 'Failed to delete company')
       }
 
-      onCompanyDeleted()
+      onCompanyDeleted(company)
       onClose()
       resetDialog()
 

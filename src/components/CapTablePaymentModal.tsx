@@ -34,9 +34,10 @@ export default function CapTablePaymentModal({
     }
 
     setIsProcessing(true)
-    const supabase = createClient()
 
     try {
+      console.log('Starting payment process for company:', companyId, 'with balance:', currentBalance)
+      
       const response = await fetch(`/api/companies/${companyId}/cap-table-data`, {
         method: 'POST',
         headers: {
@@ -48,11 +49,13 @@ export default function CapTablePaymentModal({
       })
 
       const result = await response.json()
+      console.log('Payment response:', { status: response.status, result })
 
       if (!response.ok) {
         throw new Error(result.error || 'Failed to start cap table session')
       }
 
+      console.log('Payment successful, new balance:', result.admin_member_new_balance)
       onPaymentSuccess()
       onClose()
     } catch (error) {

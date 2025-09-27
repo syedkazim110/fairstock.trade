@@ -295,87 +295,52 @@ export default function CreateCompanyPage() {
     if (!validateStep(3)) return
     
     setLoading(true)
-    const supabase = createClient()
     
     try {
-      // Log the data being sent for debugging
-      const companyPayload = {
-        ...companyData,
-        ...treasuryData,
-        created_by: user.id
-      }
-      console.log('Creating company with data:', companyPayload)
-      
-      // Create company
-      const { data: company, error: companyError } = await supabase
-        .from('companies')
-        .insert(companyPayload)
-        .select()
-        .single()
-      
-      if (companyError) {
-        console.error('Company creation error:', companyError)
-        throw companyError
+      // Prepare data for API call
+      const payload = {
+        companyData,
+        treasuryData,
+        members: members.map(member => ({
+          name: member.name,
+          email: member.email,
+          position: member.position,
+          credit_balance: member.credit_balance && member.credit_balance.trim() 
+            ? removeCommas(member.credit_balance) 
+            : ''
+        }))
       }
       
-      console.log('Company created successfully:', company)
+      console.log('Creating company with payload:', payload)
       
-      // Create members with proper credit balance conversion
-      const membersData = members.map(member => ({
-        name: member.name,
-        email: member.email,
-        position: member.position,
-        credit_balance: member.credit_balance && member.credit_balance.trim() 
-          ? parseFloat(removeCommas(member.credit_balance)) 
-          : 0,
-        company_id: company.id
-      }))
+      // Call the API endpoint
+      const response = await fetch('/api/companies', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload)
+      })
       
-      console.log('Creating members with data:', membersData)
+      const result = await response.json()
       
-      const { error: membersError } = await supabase
-        .from('company_members')
-        .insert(membersData)
-      
-      if (membersError) {
-        console.error('Members creation error:', membersError)
-        throw membersError
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to create company')
       }
       
-      console.log('Members created successfully')
+      console.log('Company created successfully:', result)
       
       // Success - redirect to companies page
-      router.push('/dashboard/companies?success=company-created')
+      router.push(result.redirect || '/dashboard/companies?success=company-created')
       
     } catch (error: any) {
       console.error('Error creating company:', error)
       
-      // Extract more detailed error information
+      // Extract error message
       let errorMessage = 'Failed to create company. Please try again.'
       
       if (error?.message) {
-        console.error('Error message:', error.message)
-        
-        // Handle specific error types
-        if (error.message.includes('violates check constraint')) {
-          errorMessage = 'Invalid business structure or position selected.'
-        } else if (error.message.includes('violates foreign key constraint')) {
-          errorMessage = 'Invalid country or state selection.'
-        } else if (error.message.includes('duplicate key')) {
-          errorMessage = 'A company with this information already exists.'
-        } else if (error.message.includes('not-null constraint')) {
-          errorMessage = 'Please fill in all required fields.'
-        } else {
-          errorMessage = `Error: ${error.message}`
-        }
-      }
-      
-      if (error?.details) {
-        console.error('Error details:', error.details)
-      }
-      
-      if (error?.hint) {
-        console.error('Error hint:', error.hint)
+        errorMessage = error.message
       }
       
       setErrors({ submit: errorMessage })

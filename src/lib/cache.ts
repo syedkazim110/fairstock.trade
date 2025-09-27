@@ -1,34 +1,56 @@
-// Simple in-memory cache for API responses
-// This will significantly improve performance for frequently accessed data
+// Session-scoped in-memory cache for API responses
+// This prevents cross-user data leakage by isolating cache per request/session
 
 interface CacheItem<T> {
   data: T
   timestamp: number
   ttl: number
+  userId: string // Add user ID for additional security
 }
 
-class MemoryCache {
+class SessionScopedCache {
   private cache = new Map<string, CacheItem<any>>()
   private readonly defaultTTL = 60000 // 1 minute default
+  private readonly sessionId: string
+  private readonly userId: string
+
+  constructor(sessionId: string, userId: string) {
+    this.sessionId = sessionId
+    this.userId = userId
+  }
+
+  private getSecureKey(key: string): string {
+    // Create a secure key that includes session and user context
+    return `${this.sessionId}:${this.userId}:${key}`
+  }
 
   set<T>(key: string, data: T, ttl: number = this.defaultTTL): void {
-    this.cache.set(key, {
+    const secureKey = this.getSecureKey(key)
+    this.cache.set(secureKey, {
       data,
       timestamp: Date.now(),
-      ttl
+      ttl,
+      userId: this.userId
     })
   }
 
   get<T>(key: string): T | null {
-    const item = this.cache.get(key)
+    const secureKey = this.getSecureKey(key)
+    const item = this.cache.get(secureKey)
     
     if (!item) {
       return null
     }
 
+    // Additional security check - ensure user ID matches
+    if (item.userId !== this.userId) {
+      this.cache.delete(secureKey)
+      return null
+    }
+
     // Check if item has expired
     if (Date.now() - item.timestamp > item.ttl) {
-      this.cache.delete(key)
+      this.cache.delete(secureKey)
       return null
     }
 
@@ -36,34 +58,95 @@ class MemoryCache {
   }
 
   delete(key: string): boolean {
-    return this.cache.delete(key)
+    const secureKey = this.getSecureKey(key)
+    return this.cache.delete(secureKey)
   }
 
   clear(): void {
-    this.cache.clear()
-  }
-
-  // Clean up expired items
-  cleanup(): void {
-    const now = Date.now()
-    for (const [key, item] of this.cache.entries()) {
-      if (now - item.timestamp > item.ttl) {
+    // Only clear items for this session/user
+    const sessionPrefix = `${this.sessionId}:${this.userId}:`
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(sessionPrefix)) {
         this.cache.delete(key)
       }
     }
   }
 
-  // Get cache stats
+  // Clean up expired items for this session
+  cleanup(): void {
+    const now = Date.now()
+    const sessionPrefix = `${this.sessionId}:${this.userId}:`
+    
+    for (const [key, item] of this.cache.entries()) {
+      if (key.startsWith(sessionPrefix) && (now - item.timestamp > item.ttl)) {
+        this.cache.delete(key)
+      }
+    }
+  }
+
+  // Get cache stats for this session
   getStats(): { size: number; keys: string[] } {
+    const sessionPrefix = `${this.sessionId}:${this.userId}:`
+    const sessionKeys = Array.from(this.cache.keys()).filter(key => key.startsWith(sessionPrefix))
+    
     return {
-      size: this.cache.size,
-      keys: Array.from(this.cache.keys())
+      size: sessionKeys.length,
+      keys: sessionKeys
     }
   }
 }
 
-// Create singleton instance
-export const cache = new MemoryCache()
+// Global cache store for managing multiple sessions
+class GlobalCacheManager {
+  private caches = new Map<string, SessionScopedCache>()
+
+  getCache(sessionId: string, userId: string): SessionScopedCache {
+    const cacheKey = `${sessionId}:${userId}`
+    
+    if (!this.caches.has(cacheKey)) {
+      this.caches.set(cacheKey, new SessionScopedCache(sessionId, userId))
+    }
+    
+    return this.caches.get(cacheKey)!
+  }
+
+  clearUserCache(userId: string): void {
+    // Clear all caches for a specific user (useful for logout)
+    for (const [key, cache] of this.caches.entries()) {
+      if (key.includes(`:${userId}`)) {
+        cache.clear()
+        this.caches.delete(key)
+      }
+    }
+  }
+
+  cleanup(): void {
+    // Clean up expired items across all caches
+    for (const cache of this.caches.values()) {
+      cache.cleanup()
+    }
+  }
+}
+
+// Create global cache manager
+const globalCacheManager = new GlobalCacheManager()
+
+// Helper function to get session-scoped cache
+export function getSessionCache(userId: string, sessionId?: string): SessionScopedCache {
+  // Use a stable session ID based on user ID to avoid cache misses on page reloads
+  const effectiveSessionId = sessionId || `session_${userId}`
+  return globalCacheManager.getCache(effectiveSessionId, userId)
+}
+
+// Legacy cache export for backward compatibility (will be deprecated)
+export const cache = {
+  set: () => { throw new Error('Use getSessionCache() instead of global cache') },
+  get: () => { throw new Error('Use getSessionCache() instead of global cache') },
+  delete: () => { throw new Error('Use getSessionCache() instead of global cache') },
+  clear: () => { throw new Error('Use getSessionCache() instead of global cache') },
+  cleanup: () => globalCacheManager.cleanup(),
+  getStats: () => ({ size: 0, keys: [] })
+}
 
 // Cache key generators for consistent naming
 export const cacheKeys = {
@@ -89,14 +172,19 @@ export const cacheTTL = {
   shareholdings: 300000, // 5 minutes - for shareholding data
 }
 
-// Utility function to wrap API calls with caching
+// Utility function to wrap API calls with session-scoped caching
 export async function withCache<T>(
   key: string,
   fetcher: () => Promise<T>,
-  ttl: number = cacheTTL.medium
+  userId: string,
+  ttl: number = cacheTTL.medium,
+  sessionId?: string
 ): Promise<T> {
+  // Get session-scoped cache for this user
+  const sessionCache = getSessionCache(userId, sessionId)
+  
   // Try to get from cache first
-  const cached = cache.get<T>(key)
+  const cached = sessionCache.get<T>(key)
   if (cached !== null) {
     return cached
   }
@@ -105,14 +193,19 @@ export async function withCache<T>(
   const data = await fetcher()
   
   // Store in cache
-  cache.set(key, data, ttl)
+  sessionCache.set(key, data, ttl)
   
   return data
+}
+
+// Helper function to clear user cache (useful for logout)
+export function clearUserCache(userId: string): void {
+  globalCacheManager.clearUserCache(userId)
 }
 
 // Cleanup expired cache items every 5 minutes
 if (typeof window === 'undefined') { // Only run on server
   setInterval(() => {
-    cache.cleanup()
+    globalCacheManager.cleanup()
   }, 300000) // 5 minutes
 }
