@@ -1,8 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
@@ -10,7 +10,23 @@ export default function LoginPage() {
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const router = useRouter()
+  const searchParams = useSearchParams()
   const supabase = createClient()
+
+  const redirectTo = searchParams.get('redirectTo')
+
+  useEffect(() => {
+    // Check if user is already logged in
+    const checkUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        // User is already logged in, redirect them
+        const destination = redirectTo || '/dashboard'
+        router.push(destination)
+      }
+    }
+    checkUser()
+  }, [router, redirectTo, supabase.auth])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -19,10 +35,16 @@ export default function LoginPage() {
     setMessage('')
 
     try {
+      // Build the callback URL with redirect parameter
+      const callbackUrl = new URL('/auth/callback', window.location.origin)
+      if (redirectTo) {
+        callbackUrl.searchParams.set('redirectTo', redirectTo)
+      }
+
       const { error } = await supabase.auth.signInWithOtp({
         email,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          emailRedirectTo: callbackUrl.toString(),
         },
       })
 

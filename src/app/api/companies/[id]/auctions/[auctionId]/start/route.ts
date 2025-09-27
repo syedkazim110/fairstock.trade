@@ -48,17 +48,36 @@ export async function POST(
 
     // Calculate start and end times
     const startTime = new Date()
-    const endTime = new Date(startTime.getTime() + (auction.duration_hours * 60 * 60 * 1000))
+    
+    // Handle different auction modes
+    let updateData: any = {
+      start_time: startTime.toISOString()
+    }
+    
+    if (auction.auction_mode === 'modified_dutch') {
+      // Modified Dutch auction: start bid collection period
+      const bidCollectionEndTime = new Date(startTime.getTime() + (auction.duration_hours * 60 * 60 * 1000))
+      updateData = {
+        ...updateData,
+        status: 'collecting_bids',
+        bid_collection_end_time: bidCollectionEndTime.toISOString()
+        // Note: current_price is not used in modified Dutch auctions
+      }
+    } else {
+      // Traditional Dutch auction: start immediate price decreasing
+      const endTime = new Date(startTime.getTime() + (auction.duration_hours * 60 * 60 * 1000))
+      updateData = {
+        ...updateData,
+        status: 'active',
+        end_time: endTime.toISOString(),
+        current_price: auction.max_price
+      }
+    }
 
     // Update auction status and times
     const { data: updatedAuction, error: updateError } = await supabase
       .from('company_auctions')
-      .update({
-        status: 'active',
-        start_time: startTime.toISOString(),
-        end_time: endTime.toISOString(),
-        current_price: auction.max_price
-      })
+      .update(updateData)
       .eq('id', auctionId)
       .select()
       .single()
@@ -86,20 +105,23 @@ export async function POST(
 }
 
 async function sendAuctionInvitations(auction: any, companyName: string, invitedEmails: string[]) {
-  const subject = `Invitation: ${auction.title} - Dutch Auction`
+  const isModifiedDutch = auction.auction_mode === 'modified_dutch'
+  const subject = `Invitation: ${auction.title} - ${isModifiedDutch ? 'Modified Dutch Auction' : 'Dutch Auction'}`
   
   const html = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-      <h2 style="color: #4F46E5;">You're Invited to Participate in a Dutch Auction</h2>
+      <h2 style="color: #4F46E5;">You're Invited to Participate in a ${isModifiedDutch ? 'Modified Dutch Auction' : 'Dutch Auction'}</h2>
       
       <div style="background-color: #F3F4F6; padding: 20px; border-radius: 8px; margin: 20px 0;">
         <h3 style="margin-top: 0; color: #1F2937;">${auction.title}</h3>
         <p><strong>Company:</strong> ${companyName}</p>
         <p><strong>Shares Available:</strong> ${auction.shares_count.toLocaleString()}</p>
-        <p><strong>Starting Price:</strong> $${auction.max_price}</p>
-        <p><strong>Minimum Price:</strong> $${auction.min_price}</p>
-        <p><strong>Price Decreases:</strong> Every ${auction.decreasing_minutes} minutes</p>
-        <p><strong>Duration:</strong> ${auction.duration_hours} hours</p>
+        <p><strong>Price Range:</strong> $${auction.min_price} - $${auction.max_price}</p>
+        ${isModifiedDutch ? 
+          `<p><strong>Bid Collection Period:</strong> ${auction.duration_hours} hours</p>` :
+          `<p><strong>Price Decreases:</strong> Every ${auction.decreasing_minutes} minutes</p>
+           <p><strong>Duration:</strong> ${auction.duration_hours} hours</p>`
+        }
       </div>
       
       <div style="background-color: #FEF3C7; border: 1px solid #F59E0B; padding: 15px; border-radius: 8px; margin: 20px 0;">
@@ -111,20 +133,38 @@ async function sendAuctionInvitations(auction: any, companyName: string, invited
       </div>
       
       <div style="margin: 30px 0;">
-        <h4>How Dutch Auctions Work:</h4>
-        <ol>
-          <li>The auction starts at the maximum price of $${auction.max_price}</li>
-          <li>Every ${auction.decreasing_minutes} minutes, the price decreases</li>
-          <li>The first person to accept the current price wins the shares</li>
-          <li>The auction ends when someone accepts or the minimum price is reached</li>
-        </ol>
+        <h4>How This Auction Works:</h4>
+        ${isModifiedDutch ? `
+          <ol>
+            <li>Submit your bid with the quantity of shares you want and your maximum price per share</li>
+            <li>You can submit multiple bids or modify your bids during the collection period</li>
+            <li>After the collection period ends, a uniform clearing price will be calculated</li>
+            <li>All winning bidders pay the same clearing price, regardless of their bid price</li>
+            <li>Shares are allocated starting from highest bids until all shares are allocated</li>
+          </ol>
+        ` : `
+          <ol>
+            <li>The auction starts at the maximum price of $${auction.max_price}</li>
+            <li>Every ${auction.decreasing_minutes} minutes, the price decreases</li>
+            <li>The first person to accept the current price wins the shares</li>
+            <li>The auction ends when someone accepts or the minimum price is reached</li>
+          </ol>
+        `}
       </div>
       
       <div style="text-align: center; margin: 30px 0;">
         <a href="${process.env.NEXT_PUBLIC_APP_URL}/auction/${auction.id}" 
            style="background-color: #4F46E5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
-          View Auction Details
+          ${isModifiedDutch ? 'Submit Your Bid' : 'View Auction Details'}
         </a>
+      </div>
+      
+      <div style="margin: 20px 0; padding: 15px; background-color: #F3F4F6; border-radius: 6px;">
+        <p style="margin: 0; color: #374151; font-size: 14px;">
+          <strong>Note:</strong> You must be logged in to access the auction. If you don't have an account, 
+          please sign up first at <a href="${process.env.NEXT_PUBLIC_APP_URL}/auth/login" style="color: #4F46E5;">
+          ${process.env.NEXT_PUBLIC_APP_URL}/auth/login</a>
+        </p>
       </div>
       
       <div style="border-top: 1px solid #E5E7EB; padding-top: 20px; margin-top: 30px; color: #6B7280; font-size: 14px;">

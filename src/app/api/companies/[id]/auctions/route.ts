@@ -83,8 +83,13 @@ export async function POST(
     // Validate required fields
     const requiredFields = [
       'title', 'shares_count', 'max_price', 'min_price', 
-      'decreasing_minutes', 'duration_hours'
+      'duration_hours', 'auction_mode'
     ]
+    
+    // For traditional auctions, decreasing_minutes is required
+    if (body.auction_mode === 'traditional') {
+      requiredFields.push('decreasing_minutes')
+    }
     
     for (const field of requiredFields) {
       if (!body[field] && body[field] !== 0) {
@@ -92,6 +97,13 @@ export async function POST(
           error: `Missing required field: ${field}` 
         }, { status: 400 })
       }
+    }
+
+    // Validate auction_mode
+    if (!['traditional', 'modified_dutch'].includes(body.auction_mode)) {
+      return NextResponse.json({ 
+        error: 'Invalid auction_mode. Must be "traditional" or "modified_dutch"' 
+      }, { status: 400 })
     }
 
     // Validate price logic
@@ -106,11 +118,11 @@ export async function POST(
       company_id: id,
       title: body.title,
       description: body.description || '',
-      auction_type: 'dutch',
+      auction_mode: body.auction_mode,
       shares_count: body.shares_count,
       max_price: body.max_price,
       min_price: body.min_price,
-      decreasing_minutes: body.decreasing_minutes,
+      decreasing_minutes: body.decreasing_minutes || 0,
       duration_hours: body.duration_hours,
       invited_members: body.invited_members || [],
       wire_account_name: body.wire_account_name || '',

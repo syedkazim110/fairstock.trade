@@ -15,6 +15,7 @@ interface Auction {
   status: string
   clearing_price?: number
   total_demand?: number
+  company_id?: string
 }
 
 interface ModifiedDutchAuctionBidModalProps {
@@ -130,40 +131,25 @@ export default function ModifiedDutchAuctionBidModal({
 
     setLoading(true)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) {
-        throw new Error('User not authenticated')
+      // Use the new API endpoint
+      const response = await fetch(`/api/companies/${auction.company_id || 'unknown'}/auctions/${auction.id}/bids`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          quantity_requested: formData.quantity,
+          max_price: formData.maxPrice
+        })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to submit bid')
       }
 
-      const bidData = {
-        auction_id: auction.id,
-        bidder_id: user.id,
-        bidder_email: user.email,
-        quantity_requested: formData.quantity,
-        max_price: formData.maxPrice,
-        bid_amount: formData.maxPrice, // For compatibility
-        bid_status: 'active'
-      }
-
-      let result
-      if (currentUserBid) {
-        // Update existing bid
-        result = await supabase
-          .from('auction_bids')
-          .update(bidData)
-          .eq('id', currentUserBid.id)
-          .select()
-      } else {
-        // Create new bid
-        result = await supabase
-          .from('auction_bids')
-          .insert(bidData)
-          .select()
-      }
-
-      if (result.error) {
-        throw result.error
-      }
+      const result = await response.json()
+      console.log('Bid submitted successfully:', result)
 
       onSuccess()
       onClose()

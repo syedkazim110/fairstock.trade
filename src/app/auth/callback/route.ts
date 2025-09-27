@@ -5,6 +5,7 @@ export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url)
   const code = searchParams.get('code')
   const next = searchParams.get('next') ?? '/'
+  const redirectTo = searchParams.get('redirectTo')
 
   if (code) {
     const supabase = await createClient()
@@ -22,12 +23,18 @@ export async function GET(request: NextRequest) {
           .single()
 
         // If no profile exists or profile is not completed, redirect to profile setup
+        // But preserve the redirectTo parameter for after profile setup
         if (!profile || !profile.profile_completed) {
-          return NextResponse.redirect(`${origin}/auth/profile-setup`)
+          const profileSetupUrl = new URL('/auth/profile-setup', origin)
+          if (redirectTo) {
+            profileSetupUrl.searchParams.set('redirectTo', redirectTo)
+          }
+          return NextResponse.redirect(profileSetupUrl.toString())
         }
         
-        // If profile is completed, redirect to dashboard
-        return NextResponse.redirect(`${origin}/dashboard`)
+        // If profile is completed, redirect to the intended destination or dashboard
+        const destination = redirectTo || '/dashboard'
+        return NextResponse.redirect(`${origin}${destination}`)
       }
     }
   }

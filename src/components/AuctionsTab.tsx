@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import CreateAuctionModal from './CreateAuctionModal'
+import ModifiedDutchAuctionBidModal from './ModifiedDutchAuctionBidModal'
+import AuctionResultsModal from './AuctionResultsModal'
 
 interface Auction {
   id: string
@@ -11,9 +13,17 @@ interface Auction {
   status: string
   created_at: string
   articles_document_id?: string
-  shares_count?: number
-  max_price?: number
-  min_price?: number
+  shares_count: number
+  max_price: number
+  min_price: number
+  auction_mode: string
+  start_time?: string
+  end_time?: string
+  bid_collection_end_time?: string
+  decreasing_minutes?: number
+  current_price?: number
+  clearing_price?: number
+  total_demand?: number
 }
 
 interface Company {
@@ -32,6 +42,12 @@ export default function AuctionsTab({ companyId }: AuctionsTabProps) {
   const [companies, setCompanies] = useState<Company[]>([])
   const [selectedAuction, setSelectedAuction] = useState<Auction | null>(null)
   const [auctionDocument, setAuctionDocument] = useState<any>(null)
+  const [startingAuction, setStartingAuction] = useState<string | null>(null)
+  const [showBidModal, setShowBidModal] = useState(false)
+  const [biddingAuction, setBiddingAuction] = useState<Auction | null>(null)
+  const [clearingAuction, setClearingAuction] = useState<string | null>(null)
+  const [showResultsModal, setShowResultsModal] = useState(false)
+  const [resultsAuction, setResultsAuction] = useState<Auction | null>(null)
 
   useEffect(() => {
     if (companyId) {
@@ -47,7 +63,7 @@ export default function AuctionsTab({ companyId }: AuctionsTabProps) {
     try {
       const { data, error } = await supabase
         .from('company_auctions')
-        .select('id, title, description, status, created_at')
+        .select('*')
         .eq('company_id', companyId)
         .order('created_at', { ascending: false })
 
@@ -145,16 +161,153 @@ export default function AuctionsTab({ companyId }: AuctionsTabProps) {
     })
   }
 
+  const handleStartAuction = async (auction: Auction) => {
+    setStartingAuction(auction.id)
+    try {
+      const response = await fetch(`/api/companies/${companyId}/auctions/${auction.id}/start`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to start auction')
+      }
+
+      // Reload auctions to show updated status
+      await loadAuctions()
+    } catch (error) {
+      console.error('Error starting auction:', error)
+      alert(`Failed to start auction: ${error instanceof Error ? error.message : 'Please try again.'}`)
+    } finally {
+      setStartingAuction(null)
+    }
+  }
+
+  const handlePlaceBid = async (auction: Auction) => {
+    // Get full auction details for the bid modal
+    const supabase = createClient()
+    
+    try {
+      const { data: auctionData, error: auctionError } = await supabase
+        .from('company_auctions')
+        .select('*')
+        .eq('id', auction.id)
+        .single()
+
+      if (auctionError) {
+        console.error('Error fetching auction details:', auctionError)
+        alert('Failed to load auction details')
+        return
+      }
+
+      setBiddingAuction(auctionData)
+      setShowBidModal(true)
+    } catch (error) {
+      console.error('Error loading auction for bidding:', error)
+      alert('Failed to load auction details')
+    }
+  }
+
+  const handleBidSuccess = () => {
+    setShowBidModal(false)
+    setBiddingAuction(null)
+    loadAuctions() // Reload to show any status changes
+  }
+
+  const closeBidModal = () => {
+    setShowBidModal(false)
+    setBiddingAuction(null)
+  }
+
+  const handleCalculateResults = async (auction: Auction) => {
+    setClearingAuction(auction.id)
+    try {
+      const response = await fetch(`/api/companies/${companyId}/auctions/${auction.id}/clear`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ manual_trigger: true })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to calculate clearing results')
+      }
+
+      const data = await response.json()
+      console.log('Clearing results calculated:', data)
+
+      // Reload auctions to show updated status
+      await loadAuctions()
+      
+      // Show success message
+      alert(`Clearing calculation completed! Clearing price: $${data.clearing_results.clearing_price}`)
+    } catch (error) {
+      console.error('Error calculating clearing results:', error)
+      alert(`Failed to calculate results: ${error instanceof Error ? error.message : 'Please try again.'}`)
+    } finally {
+      setClearingAuction(null)
+    }
+  }
+
+  const handleViewResults = async (auction: Auction) => {
+    setResultsAuction(auction)
+    setShowResultsModal(true)
+  }
+
+  const closeResultsModal = () => {
+    setShowResultsModal(false)
+    setResultsAuction(null)
+  }
+
+  const canTriggerClearing = (auction: Auction) => {
+    if (auction.auction_mode !== 'modified_dutch') return false
+    if (auction.status !== 'collecting_bids') return false
+    
+    // Check if bid collection period has ended
+    if (auction.bid_collection_end_time) {
+      const now = new Date()
+      const endTime = new Date(auction.bid_collection_end_time)
+      return now >= endTime
+    }
+    
+    return false
+  }
+
+  const isCollectionExpired = (auction: Auction) => {
+    if (!auction.bid_collection_end_time) return false
+    const now = new Date()
+    const endTime = new Date(auction.bid_collection_end_time)
+    return now >= endTime
+  }
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'active':
         return 'bg-green-100 text-green-800'
+      case 'collecting_bids':
+        return 'bg-yellow-100 text-yellow-800'
       case 'completed':
         return 'bg-blue-100 text-blue-800'
       case 'cancelled':
         return 'bg-red-100 text-red-800'
+      case 'draft':
+        return 'bg-gray-100 text-gray-800'
       default:
         return 'bg-gray-100 text-gray-800'
+    }
+  }
+
+  const getStatusText = (status: string) => {
+    switch (status) {
+      case 'collecting_bids':
+        return 'Collecting Bids'
+      default:
+        return status.charAt(0).toUpperCase() + status.slice(1)
     }
   }
 
@@ -206,25 +359,72 @@ export default function AuctionsTab({ companyId }: AuctionsTabProps) {
                   )}
                   <div className="flex items-center space-x-4 text-sm text-gray-500">
                     <span>Created: {formatDate(auction.created_at)}</span>
+                    {auction.status === 'collecting_bids' && auction.bid_collection_end_time && (
+                      <span className="text-yellow-600 font-medium">
+                        Ends: {formatDate(auction.bid_collection_end_time)}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="flex-shrink-0 ml-4">
                   <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(auction.status)}`}>
-                    {auction.status.charAt(0).toUpperCase() + auction.status.slice(1)}
+                    {getStatusText(auction.status)}
                   </span>
                 </div>
               </div>
               
               <div className="mt-4 flex justify-end space-x-2">
+                {auction.status === 'draft' && (
+                  <button 
+                    onClick={() => handleStartAuction(auction)}
+                    disabled={startingAuction === auction.id}
+                    className="bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white px-3 py-1 rounded text-sm font-medium flex items-center space-x-1"
+                  >
+                    {startingAuction === auction.id && (
+                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white"></div>
+                    )}
+                    <span>{startingAuction === auction.id ? 'Starting...' : 'Start Auction'}</span>
+                  </button>
+                )}
+                {auction.status === 'collecting_bids' && !isCollectionExpired(auction) && (
+                  <button 
+                    onClick={() => handlePlaceBid(auction)}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm font-medium"
+                  >
+                    Place Bid
+                  </button>
+                )}
+                {canTriggerClearing(auction) && (
+                  <button 
+                    onClick={() => handleCalculateResults(auction)}
+                    disabled={clearingAuction === auction.id}
+                    className="bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white px-3 py-1 rounded text-sm font-medium flex items-center space-x-1"
+                  >
+                    {clearingAuction === auction.id && (
+                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white"></div>
+                    )}
+                    <span>{clearingAuction === auction.id ? 'Calculating...' : 'Calculate Results'}</span>
+                  </button>
+                )}
+                {auction.status === 'completed' && (
+                  <button 
+                    onClick={() => handleViewResults(auction)}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm font-medium"
+                  >
+                    View Results
+                  </button>
+                )}
                 <button 
                   onClick={() => handleViewAuctionDetails(auction)}
                   className="text-indigo-600 hover:text-indigo-800 text-sm font-medium"
                 >
                   View Details
                 </button>
-                <button className="text-gray-600 hover:text-gray-800 text-sm font-medium">
-                  Edit
-                </button>
+                {auction.status === 'draft' && (
+                  <button className="text-gray-600 hover:text-gray-800 text-sm font-medium">
+                    Edit
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -274,17 +474,31 @@ export default function AuctionsTab({ companyId }: AuctionsTabProps) {
                       <span className="text-sm text-gray-500">Status:</span>
                       <p className="font-medium">
                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(selectedAuction.status)}`}>
-                          {selectedAuction.status.charAt(0).toUpperCase() + selectedAuction.status.slice(1)}
+                          {getStatusText(selectedAuction.status)}
                         </span>
+                      </p>
+                    </div>
+                    <div>
+                      <span className="text-sm text-gray-500">Auction Type:</span>
+                      <p className="font-medium">
+                        {(selectedAuction as any).auction_mode === 'modified_dutch' ? 'Modified Dutch (Uniform Clearing Price)' : 'Traditional Dutch'}
                       </p>
                     </div>
                     <div>
                       <span className="text-sm text-gray-500">Created:</span>
                       <p className="font-medium">{formatDate(selectedAuction.created_at)}</p>
                     </div>
+                    {(selectedAuction as any).start_time && (
+                      <div>
+                        <span className="text-sm text-gray-500">
+                          {(selectedAuction as any).auction_mode === 'modified_dutch' ? 'Bid Collection Started:' : 'Started:'}
+                        </span>
+                        <p className="font-medium">{formatDate((selectedAuction as any).start_time)}</p>
+                      </div>
+                    )}
                     {selectedAuction.shares_count && (
                       <div>
-                        <span className="text-sm text-gray-500">Shares:</span>
+                        <span className="text-sm text-gray-500">Shares Available:</span>
                         <p className="font-medium">{selectedAuction.shares_count.toLocaleString()}</p>
                       </div>
                     )}
@@ -294,12 +508,65 @@ export default function AuctionsTab({ companyId }: AuctionsTabProps) {
                         <p className="font-medium">${selectedAuction.min_price} - ${selectedAuction.max_price}</p>
                       </div>
                     )}
+                    {(selectedAuction as any).auction_mode === 'modified_dutch' && (selectedAuction as any).bid_collection_end_time && (
+                      <div>
+                        <span className="text-sm text-gray-500">Bid Collection Ends:</span>
+                        <p className="font-medium">{formatDate((selectedAuction as any).bid_collection_end_time)}</p>
+                      </div>
+                    )}
+                    {(selectedAuction as any).auction_mode === 'traditional' && (selectedAuction as any).end_time && (
+                      <div>
+                        <span className="text-sm text-gray-500">Auction Ends:</span>
+                        <p className="font-medium">{formatDate((selectedAuction as any).end_time)}</p>
+                      </div>
+                    )}
+                    {(selectedAuction as any).auction_mode === 'traditional' && (selectedAuction as any).decreasing_minutes && (
+                      <div>
+                        <span className="text-sm text-gray-500">Price Decreases:</span>
+                        <p className="font-medium">Every {(selectedAuction as any).decreasing_minutes} minutes</p>
+                      </div>
+                    )}
+                    {(selectedAuction as any).auction_mode === 'traditional' && (selectedAuction as any).current_price && (
+                      <div>
+                        <span className="text-sm text-gray-500">Current Price:</span>
+                        <p className="font-medium text-green-600">${(selectedAuction as any).current_price}</p>
+                      </div>
+                    )}
+                    {(selectedAuction as any).auction_mode === 'modified_dutch' && (selectedAuction as any).clearing_price && (
+                      <div>
+                        <span className="text-sm text-gray-500">Clearing Price:</span>
+                        <p className="font-medium text-blue-600">${(selectedAuction as any).clearing_price}</p>
+                      </div>
+                    )}
                   </div>
                   {selectedAuction.description && (
                     <div className="mt-4">
                       <span className="text-sm text-gray-500">Description:</span>
                       <p className="font-medium mt-1">{selectedAuction.description}</p>
                     </div>
+                  )}
+                </div>
+
+                {/* Auction Mode Explanation */}
+                <div className={`rounded-lg p-4 ${(selectedAuction as any).auction_mode === 'modified_dutch' ? 'bg-blue-50 border border-blue-200' : 'bg-green-50 border border-green-200'}`}>
+                  <h4 className={`font-medium mb-2 ${(selectedAuction as any).auction_mode === 'modified_dutch' ? 'text-blue-900' : 'text-green-900'}`}>
+                    How This Auction Works:
+                  </h4>
+                  {(selectedAuction as any).auction_mode === 'modified_dutch' ? (
+                    <ul className="text-sm text-blue-800 space-y-1">
+                      <li>• Bidders submit quantity and maximum price during the collection period</li>
+                      <li>• Multiple bids can be submitted or modified until the collection period ends</li>
+                      <li>• A uniform clearing price is calculated based on all submitted bids</li>
+                      <li>• All winning bidders pay the same clearing price</li>
+                      <li>• Shares are allocated starting from highest bids until all shares are allocated</li>
+                    </ul>
+                  ) : (
+                    <ul className="text-sm text-green-800 space-y-1">
+                      <li>• The auction starts at the maximum price of ${selectedAuction.max_price}</li>
+                      <li>• Price decreases every {(selectedAuction as any).decreasing_minutes || 'few'} minutes</li>
+                      <li>• The first bidder to accept the current price wins all shares</li>
+                      <li>• The auction ends when someone accepts or minimum price is reached</li>
+                    </ul>
                   )}
                 </div>
 
@@ -354,7 +621,24 @@ export default function AuctionsTab({ companyId }: AuctionsTabProps) {
             </div>
 
             {/* Footer */}
-            <div className="px-6 py-4 border-t border-gray-200 flex justify-end">
+            <div className="px-6 py-4 border-t border-gray-200 flex justify-between">
+              <div>
+                {selectedAuction.status === 'draft' && (
+                  <button 
+                    onClick={() => {
+                      closeAuctionDetails()
+                      handleStartAuction(selectedAuction)
+                    }}
+                    disabled={startingAuction === selectedAuction.id}
+                    className="bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white px-4 py-2 rounded-md text-sm font-medium flex items-center space-x-2"
+                  >
+                    {startingAuction === selectedAuction.id && (
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    )}
+                    <span>{startingAuction === selectedAuction.id ? 'Starting...' : 'Start Auction'}</span>
+                  </button>
+                )}
+              </div>
               <button
                 onClick={closeAuctionDetails}
                 className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
@@ -364,6 +648,23 @@ export default function AuctionsTab({ companyId }: AuctionsTabProps) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Bid Modal */}
+      {showBidModal && biddingAuction && (
+        <ModifiedDutchAuctionBidModal
+          auction={{ ...biddingAuction, company_id: companyId }}
+          onClose={closeBidModal}
+          onSuccess={handleBidSuccess}
+        />
+      )}
+
+      {/* Results Modal */}
+      {showResultsModal && resultsAuction && (
+        <AuctionResultsModal
+          auction={resultsAuction}
+          onClose={closeResultsModal}
+        />
       )}
     </div>
   )

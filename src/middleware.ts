@@ -15,7 +15,7 @@ export async function middleware(request: NextRequest) {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
+          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
           supabaseResponse = NextResponse.next({
             request,
           })
@@ -27,65 +27,29 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  // IMPORTANT: Avoid writing any logic between createServerClient and
-  // supabase.auth.getUser(). A simple mistake could make it very hard to debug
-  // issues with users being randomly logged out.
+  // Refresh session if expired - required for Server Components
+  await supabase.auth.getUser()
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  // Protect authenticated routes
-  if (request.nextUrl.pathname.startsWith('/dashboard') && !user) {
-    // No user, redirect to login
-    const url = request.nextUrl.clone()
-    url.pathname = '/auth/login'
-    return NextResponse.redirect(url)
-  }
-
-  // Redirect authenticated users away from auth pages (except profile-setup)
-  if (request.nextUrl.pathname.startsWith('/auth') && user) {
-    // Allow access to profile-setup if profile is not completed
-    if (request.nextUrl.pathname === '/auth/profile-setup') {
-      // Check if user has completed profile
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('profile_completed')
-        .eq('id', user.id)
-        .single()
-
-      // If profile is completed, redirect to dashboard
-      if (profile?.profile_completed) {
-        const url = request.nextUrl.clone()
-        url.pathname = '/dashboard'
-        return NextResponse.redirect(url)
-      }
-      // Otherwise, allow access to profile-setup page
-    } else {
-      // For other auth pages, check profile completion and redirect accordingly
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('profile_completed')
-        .eq('id', user.id)
-        .single()
-
-      const url = request.nextUrl.clone()
-      if (!profile?.profile_completed) {
-        url.pathname = '/auth/profile-setup'
-      } else {
-        url.pathname = '/dashboard'
-      }
-      return NextResponse.redirect(url)
+  // Protect auction routes
+  if (request.nextUrl.pathname.startsWith('/auction/')) {
+    const { data: { user } } = await supabase.auth.getUser()
+    
+    if (!user) {
+      // Redirect to login with return URL
+      const redirectUrl = new URL('/auth/login', request.url)
+      redirectUrl.searchParams.set('redirectTo', request.nextUrl.pathname)
+      return NextResponse.redirect(redirectUrl)
     }
   }
 
-  // IMPORTANT: You *must* return the supabaseResponse object as it is. If you're
-  // creating a new response object with NextResponse.next() make sure to:
-  // 1. Pass the request in it, like so:
-  //    const myNewResponse = NextResponse.next({ request })
-  // 2. Copy over the cookies, like so:
-  //    myNewResponse.cookies.setAll(supabaseResponse.cookies.getAll())
-  // 3. Change the myNewResponse object instead of the supabaseResponse object
+  // Protect dashboard routes
+  if (request.nextUrl.pathname.startsWith('/dashboard')) {
+    const { data: { user } } = await supabase.auth.getUser()
+    
+    if (!user) {
+      return NextResponse.redirect(new URL('/auth/login', request.url))
+    }
+  }
 
   return supabaseResponse
 }
@@ -97,7 +61,7 @@ export const config = {
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
-     * Feel free to modify this pattern to include more paths.
+     * - public folder
      */
     '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
