@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency, formatNumber } from '@/lib/modified-dutch-auction'
+import SettlementDashboard from './SettlementDashboard'
 
 interface Auction {
   id: string
@@ -13,6 +14,7 @@ interface Auction {
   min_price: number
   auction_mode: string
   status: string
+  company_id: string
   clearing_price?: number
   total_demand?: number
   clearing_calculated_at?: string
@@ -21,6 +23,7 @@ interface Auction {
 interface AuctionResultsModalProps {
   auction: Auction
   onClose: () => void
+  isOwner?: boolean
 }
 
 interface BidAllocation {
@@ -47,14 +50,17 @@ interface ClearingResults {
 
 export default function AuctionResultsModal({ 
   auction, 
-  onClose 
+  onClose,
+  isOwner = false
 }: AuctionResultsModalProps) {
   const [loading, setLoading] = useState(true)
   const [clearingResults, setClearingResults] = useState<ClearingResults | null>(null)
   const [bidAllocations, setBidAllocations] = useState<BidAllocation[]>([])
   const [userAllocation, setUserAllocation] = useState<BidAllocation | null>(null)
-  const [isCompanyOwner, setIsCompanyOwner] = useState(false)
-  const supabase = createClient()
+  const [error, setError] = useState<string | null>(null)
+  const [clearingCompleted, setClearingCompleted] = useState(false)
+  const [isCompanyOwner, setIsCompanyOwner] = useState(isOwner)
+  const [showSettlementDashboard, setShowSettlementDashboard] = useState(false)
 
   useEffect(() => {
     loadAuctionResults()
@@ -62,81 +68,50 @@ export default function AuctionResultsModal({
 
   const loadAuctionResults = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-
-      // Check if user is company owner
-      const { data: company } = await supabase
-        .from('companies')
-        .select('created_by')
-        .eq('id', (await supabase
-          .from('company_auctions')
-          .select('company_id')
-          .eq('id', auction.id)
-          .single()
-        ).data?.company_id)
-        .single()
-
-      const isOwner = company?.created_by === user.id
-      setIsCompanyOwner(isOwner)
-
-      // Load clearing results
-      const { data: results, error: resultsError } = await supabase
-        .from('auction_clearing_results')
-        .select('*')
-        .eq('auction_id', auction.id)
-        .single()
-
-      if (resultsError) {
-        console.error('Error loading clearing results:', resultsError)
-      } else {
-        setClearingResults(results)
+      setLoading(true)
+      setError(null)
+      
+      // Use the new dedicated allocations API endpoint
+      const response = await fetch(`/api/companies/${auction.company_id}/auctions/${auction.id}/allocations`)
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to load allocation results')
       }
 
-      // Load bid allocations
-      if (isOwner) {
-        // Company owners can see all allocations
-        const { data: allocations, error: allocationsError } = await supabase
-          .from('bid_allocations')
-          .select('*')
-          .eq('auction_id', auction.id)
-          .order('allocated_quantity', { ascending: false })
-
-        if (allocationsError) {
-          console.error('Error loading allocations:', allocationsError)
-        } else {
-          setBidAllocations(allocations || [])
-        }
-      } else {
-        // Regular users can only see their own allocation
-        const { data: userAlloc, error: userAllocError } = await supabase
-          .from('bid_allocations')
-          .select('*')
-          .eq('auction_id', auction.id)
-          .eq('bidder_id', user.id)
-          .single()
-
-        if (!userAllocError && userAlloc) {
-          setUserAllocation(userAlloc)
-        }
+      const data = await response.json()
+      
+      // Handle the case where clearing hasn't been completed yet
+      if (!data.clearing_completed) {
+        setClearingCompleted(false)
+        setError(data.message || 'Auction clearing has not been completed yet.')
+        return
       }
+
+      setClearingCompleted(true)
+      setClearingResults(data.clearing_results)
+      setBidAllocations(data.allocations.data || [])
+      setUserAllocation(data.user_allocation)
+      setIsCompanyOwner(data.user_role === 'company_owner')
+
     } catch (error) {
       console.error('Error loading auction results:', error)
+      setError(error instanceof Error ? error.message : 'Failed to load allocation results')
     } finally {
       setLoading(false)
     }
   }
 
   const getSuccessfulBidders = () => {
-    return bidAllocations.filter(allocation => allocation.allocated_quantity > 0)
+    return bidAllocations.filter((allocation: BidAllocation) => allocation.allocated_quantity > 0)
   }
 
   const getRejectedBidders = () => {
-    return bidAllocations.filter(allocation => allocation.allocated_quantity === 0)
+    return bidAllocations.filter((allocation: BidAllocation) => allocation.allocated_quantity === 0)
   }
 
   const getTotalRevenue = () => {
-    return getSuccessfulBidders().reduce((sum, allocation) => sum + allocation.total_amount, 0)
+    return getSuccessfulBidders().reduce((sum: number, allocation: BidAllocation) => sum + allocation.total_amount, 0)
   }
 
   const getAllocationStatusText = (allocation: BidAllocation) => {
@@ -188,6 +163,22 @@ export default function AuctionResultsModal({
 
         {/* Content */}
         <div className="px-6 py-6 max-h-[70vh] overflow-y-auto space-y-6">
+          {/* Error Message */}
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <p className="text-sm text-red-800">{error}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Clearing Results Summary */}
           {clearingResults && (
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
@@ -331,7 +322,7 @@ export default function AuctionResultsModal({
                           </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
-                          {getSuccessfulBidders().map((allocation) => (
+                          {getSuccessfulBidders().map((allocation: BidAllocation) => (
                             <tr key={allocation.id}>
                               <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                                 {allocation.bidder_email}
@@ -388,7 +379,7 @@ export default function AuctionResultsModal({
                           </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
-                          {getRejectedBidders().map((allocation) => (
+                          {getRejectedBidders().map((allocation: BidAllocation) => (
                             <tr key={allocation.id}>
                               <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                                 {allocation.bidder_email}
@@ -413,7 +404,7 @@ export default function AuctionResultsModal({
           )}
 
           {/* No Results Message */}
-          {!clearingResults && !loading && (
+          {!clearingCompleted && !loading && !error && (
             <div className="text-center py-12">
               <div className="text-gray-400 mb-4">
                 <svg className="w-12 h-12 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -429,7 +420,20 @@ export default function AuctionResultsModal({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-200 flex justify-end">
+        <div className="px-6 py-4 border-t border-gray-200 flex justify-between">
+          <div>
+            {isCompanyOwner && clearingCompleted && getSuccessfulBidders().length > 0 && (
+              <button
+                onClick={() => setShowSettlementDashboard(true)}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium flex items-center space-x-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <span>Manage Settlement</span>
+              </button>
+            )}
+          </div>
           <button
             onClick={onClose}
             className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
@@ -438,6 +442,16 @@ export default function AuctionResultsModal({
           </button>
         </div>
       </div>
+
+      {/* Settlement Dashboard */}
+      {showSettlementDashboard && (
+        <SettlementDashboard
+          companyId={auction.company_id}
+          auctionId={auction.id}
+          auctionTitle={auction.title}
+          onClose={() => setShowSettlementDashboard(false)}
+        />
+      )}
     </div>
   )
 }

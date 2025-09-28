@@ -1,6 +1,8 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextRequest, NextResponse } from 'next/server'
 import { calculateClearingPrice, validateBids, type Bid } from '@/lib/modified-dutch-auction'
+import { auctionClearingNotificationService } from '@/lib/email/auctionClearingNotificationService'
+import { settlementNotificationService } from '@/lib/email/settlementNotificationService'
 
 export async function POST(
   request: NextRequest,
@@ -199,6 +201,59 @@ export async function POST(
       .filter(a => a.allocated_quantity > 0)
       .reduce((sum, a) => sum + a.total_amount, 0)
 
+    // Send clearing notifications (don't let notification failures break the clearing)
+    let notificationResults = null
+    try {
+      console.log('🔔 Sending clearing notifications...')
+      notificationResults = await auctionClearingNotificationService.sendClearingNotifications(auctionId)
+      
+      if (notificationResults.success) {
+        console.log(`✅ Notifications sent successfully: ${notificationResults.bidder_notifications_sent} bidders, ${notificationResults.company_notifications_sent} company`)
+      } else {
+        console.error('⚠️  Some notifications failed:', notificationResults.errors)
+      }
+    } catch (notificationError) {
+      console.error('❌ Failed to send clearing notifications:', notificationError)
+      // Continue with the response - don't fail the clearing due to notification issues
+    }
+
+    // Initialize settlement tracking for successful allocations
+    let settlementInitialized = false
+    try {
+      console.log('🔄 Initializing settlement tracking...')
+      const { error: settlementError } = await supabase.rpc('initialize_auction_settlement', {
+        p_auction_id: auctionId
+      })
+      
+      if (settlementError) {
+        console.error('⚠️  Failed to initialize settlement tracking:', settlementError)
+      } else {
+        console.log('✅ Settlement tracking initialized successfully')
+        settlementInitialized = true
+      }
+    } catch (settlementError) {
+      console.error('❌ Error initializing settlement tracking:', settlementError)
+      // Continue with the response - don't fail the clearing due to settlement initialization issues
+    }
+
+    // Send payment instruction notifications to successful bidders
+    let paymentInstructionResults = null
+    if (settlementInitialized) {
+      try {
+        console.log('📧 Sending payment instruction notifications...')
+        paymentInstructionResults = await settlementNotificationService.sendPaymentInstructions(auctionId)
+        
+        if (paymentInstructionResults.success) {
+          console.log(`✅ Payment instructions sent: ${paymentInstructionResults.details.payment_instructions_sent} bidders, ${paymentInstructionResults.details.summary_notifications_sent} company`)
+        } else {
+          console.error('⚠️  Some payment instruction notifications failed:', paymentInstructionResults.errors)
+        }
+      } catch (paymentNotificationError) {
+        console.error('❌ Failed to send payment instruction notifications:', paymentNotificationError)
+        // Continue with the response - don't fail the clearing due to notification issues
+      }
+    }
+
     // Return success response
     return NextResponse.json({
       success: true,
@@ -213,7 +268,23 @@ export async function POST(
         rejected_bidders: clearingResult.allocations.filter(a => a.allocated_quantity === 0).length
       },
       allocations_count: clearingResult.allocations.length,
-      calculation_details: clearingResult.calculation_details
+      calculation_details: clearingResult.calculation_details,
+      settlement: {
+        initialized: settlementInitialized,
+        successful_allocations: clearingResult.allocations.filter(a => a.allocated_quantity > 0).length,
+        total_settlement_amount: totalRevenue,
+        next_steps: settlementInitialized ? [
+          'Company owners can now manage settlement through the settlement dashboard',
+          'Successful bidders will receive payment instructions via email',
+          'Settlement process: Payment Confirmation → Share Transfer → Completion'
+        ] : ['Settlement tracking initialization failed - please contact support']
+      },
+      notifications: notificationResults ? {
+        sent: notificationResults.success,
+        bidder_notifications: notificationResults.bidder_notifications_sent,
+        company_notifications: notificationResults.company_notifications_sent,
+        errors: notificationResults.errors
+      } : null
     })
 
   } catch (error) {
@@ -267,13 +338,13 @@ export async function GET(
     // Check if user is company owner
     const isCompanyOwner = auction.companies.created_by === user.id
 
-    let bidAllocations = null
+    let allocations: any[] = []
     let userAllocation = null
 
     if (clearingResults) {
       if (isCompanyOwner) {
         // Company owners can see all allocations
-        const { data: allocations, error: allocationsError } = await supabase
+        const { data: allAllocations, error: allocationsError } = await supabase
           .from('bid_allocations')
           .select('*')
           .eq('auction_id', auctionId)
@@ -282,7 +353,7 @@ export async function GET(
         if (allocationsError) {
           console.error('Error fetching allocations:', allocationsError)
         } else {
-          bidAllocations = allocations
+          allocations = allAllocations || []
         }
       } else {
         // Regular users can only see their own allocation
@@ -295,9 +366,15 @@ export async function GET(
 
         if (!userAllocError && userAlloc) {
           userAllocation = userAlloc
+          allocations = [userAlloc] // Consistent format
         }
       }
     }
+
+    // Calculate summary statistics
+    const successfulAllocations = allocations.filter(a => a.allocated_quantity > 0)
+    const rejectedAllocations = allocations.filter(a => a.allocated_quantity === 0)
+    const totalRevenue = successfulAllocations.reduce((sum, a) => sum + a.total_amount, 0)
 
     return NextResponse.json({
       auction: {
@@ -312,10 +389,27 @@ export async function GET(
         clearing_calculated_at: auction.clearing_calculated_at
       },
       clearing_results: clearingResults,
-      bid_allocations: bidAllocations,
+      clearing_completed: !!clearingResults,
+      user_role: isCompanyOwner ? 'company_owner' : 'member',
+      allocations: {
+        total_count: allocations.length,
+        successful_count: successfulAllocations.length,
+        rejected_count: rejectedAllocations.length,
+        total_revenue: totalRevenue,
+        data: allocations
+      },
       user_allocation: userAllocation,
       is_company_owner: isCompanyOwner,
-      can_trigger_clearing: isCompanyOwner && auction.status === 'collecting_bids'
+      can_trigger_clearing: isCompanyOwner && auction.status === 'collecting_bids',
+      summary: clearingResults ? {
+        clearing_price: clearingResults.clearing_price,
+        total_demand: clearingResults.total_demand,
+        shares_allocated: clearingResults.shares_allocated,
+        shares_remaining: clearingResults.shares_remaining,
+        pro_rata_applied: clearingResults.pro_rata_applied,
+        subscription_ratio: ((clearingResults.total_demand / auction.shares_count) * 100).toFixed(1),
+        allocation_ratio: ((clearingResults.shares_allocated / auction.shares_count) * 100).toFixed(1)
+      } : null
     })
 
   } catch (error) {

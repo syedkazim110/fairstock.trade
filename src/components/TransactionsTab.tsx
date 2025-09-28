@@ -12,7 +12,16 @@ interface Transaction {
   from_member_email: string | null
   to_member_email: string
   description: string | null
+  enhanced_description: string | null
   created_at: string
+  auction_id: string | null
+  auction_title: string | null
+  auction_clearing_price: number | null
+  auction_completion_date: string | null
+  auction_allocated_quantity: number | null
+  auction_settlement_status: string | null
+  auction_settlement_date: string | null
+  transaction_source: 'auction' | 'manual'
 }
 
 interface TransactionsTabProps {
@@ -32,22 +41,19 @@ export default function TransactionsTab({ companyId }: TransactionsTabProps) {
 
   const loadTransactions = async () => {
     setLoading(true)
-    const supabase = createClient()
     
     try {
-      const { data, error } = await supabase
-        .from('company_transactions')
-        .select('id, transaction_type, amount, share_quantity, from_member_email, to_member_email, description, created_at')
-        .eq('company_id', companyId)
-        .order('created_at', { ascending: false })
-
-      if (error) {
-        console.error('Error fetching transactions:', error)
-      } else {
-        setTransactions(data || [])
+      const response = await fetch(`/api/companies/${companyId}/transactions`)
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch transactions')
       }
+      
+      const data = await response.json()
+      setTransactions(data.transactions || [])
     } catch (error) {
       console.error('Error loading transactions:', error)
+      setTransactions([])
     } finally {
       setLoading(false)
     }
@@ -84,9 +90,19 @@ export default function TransactionsTab({ companyId }: TransactionsTabProps) {
         return 'bg-purple-100 text-purple-800'
       case 'share_sale':
         return 'bg-orange-100 text-orange-800'
+      case 'share_issuance':
+        return 'bg-indigo-100 text-indigo-800'
       default:
         return 'bg-gray-100 text-gray-800'
     }
+  }
+
+  const getAuctionIcon = () => {
+    return (
+      <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+      </svg>
+    )
   }
 
   const getTransactionIcon = (type: string) => {
@@ -189,9 +205,19 @@ export default function TransactionsTab({ companyId }: TransactionsTabProps) {
                           <div className="flex-shrink-0 mr-3">
                             {getTransactionIcon(transaction.transaction_type)}
                           </div>
-                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getTransactionTypeColor(transaction.transaction_type)}`}>
-                            {transaction.transaction_type.replace('_', ' ').toUpperCase()}
-                          </span>
+                          <div className="flex flex-col space-y-1">
+                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getTransactionTypeColor(transaction.transaction_type)}`}>
+                              {transaction.transaction_type.replace('_', ' ').toUpperCase()}
+                            </span>
+                            {transaction.transaction_source === 'auction' && (
+                              <div className="flex items-center space-x-1">
+                                {getAuctionIcon()}
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                                  Auction
+                                </span>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
@@ -225,7 +251,24 @@ export default function TransactionsTab({ companyId }: TransactionsTabProps) {
                       </td>
                       <td className="px-6 py-4">
                         <div className="text-sm text-gray-900">
-                          {transaction.description || 'No description'}
+                          <div>{transaction.enhanced_description || transaction.description || 'No description'}</div>
+                          {transaction.transaction_source === 'auction' && transaction.auction_title && (
+                            <div className="mt-2 space-y-1">
+                              <div className="text-xs text-blue-600 font-medium">
+                                🎯 {transaction.auction_title}
+                              </div>
+                              {transaction.auction_clearing_price && (
+                                <div className="text-xs text-gray-500">
+                                  Clearing Price: {formatCurrency(transaction.auction_clearing_price)}
+                                </div>
+                              )}
+                              {transaction.auction_settlement_status && (
+                                <div className="text-xs text-gray-500">
+                                  Settlement: {transaction.auction_settlement_status.replace('_', ' ')}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
@@ -249,10 +292,18 @@ export default function TransactionsTab({ companyId }: TransactionsTabProps) {
                     <div className="flex-shrink-0 mr-3">
                       {getTransactionIcon(transaction.transaction_type)}
                     </div>
-                    <div>
+                    <div className="flex flex-col space-y-1">
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getTransactionTypeColor(transaction.transaction_type)}`}>
                         {transaction.transaction_type.replace('_', ' ').toUpperCase()}
                       </span>
+                      {transaction.transaction_source === 'auction' && (
+                        <div className="flex items-center space-x-1">
+                          {getAuctionIcon()}
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                            Auction
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="text-lg font-medium text-gray-900">
@@ -290,7 +341,24 @@ export default function TransactionsTab({ companyId }: TransactionsTabProps) {
                   </div>
                   <div>
                     <span className="text-sm text-gray-500">Description:</span>
-                    <p className="text-sm text-gray-900">{transaction.description || 'No description'}</p>
+                    <p className="text-sm text-gray-900">{transaction.enhanced_description || transaction.description || 'No description'}</p>
+                    {transaction.transaction_source === 'auction' && transaction.auction_title && (
+                      <div className="mt-2 space-y-1 p-2 bg-blue-50 rounded-md">
+                        <div className="text-xs text-blue-600 font-medium">
+                          🎯 {transaction.auction_title}
+                        </div>
+                        {transaction.auction_clearing_price && (
+                          <div className="text-xs text-gray-600">
+                            Clearing Price: {formatCurrency(transaction.auction_clearing_price)}
+                          </div>
+                        )}
+                        {transaction.auction_settlement_status && (
+                          <div className="text-xs text-gray-600">
+                            Settlement: {transaction.auction_settlement_status.replace('_', ' ')}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <div className="text-sm text-gray-500">
                     {formatDate(transaction.created_at)}

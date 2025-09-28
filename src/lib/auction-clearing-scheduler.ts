@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { calculateClearingPrice, validateBids, type Bid } from '@/lib/modified-dutch-auction'
+import { auctionClearingNotificationService } from '@/lib/email/auctionClearingNotificationService'
 
 /**
  * Automatic clearing scheduler for modified Dutch auctions
@@ -193,6 +194,22 @@ export async function processExpiredAuctions() {
           .filter(a => a.allocated_quantity > 0)
           .reduce((sum, a) => sum + a.total_amount, 0)
 
+        // Send clearing notifications (don't let notification failures break the clearing)
+        let notificationResults = null
+        try {
+          console.log(`🔔 Sending clearing notifications for auction ${auction.id}...`)
+          notificationResults = await auctionClearingNotificationService.sendClearingNotifications(auction.id)
+          
+          if (notificationResults.success) {
+            console.log(`   ✅ Notifications sent: ${notificationResults.bidder_notifications_sent} bidders, ${notificationResults.company_notifications_sent} company`)
+          } else {
+            console.log(`   ⚠️  Some notifications failed:`, notificationResults.errors)
+          }
+        } catch (notificationError) {
+          console.error(`   ❌ Failed to send clearing notifications for auction ${auction.id}:`, notificationError)
+          // Continue with the processing - don't fail the clearing due to notification issues
+        }
+
         console.log(`✅ Successfully processed auction ${auction.id}`)
         console.log(`   - Clearing price: $${clearingResult.clearing_price}`)
         console.log(`   - Total revenue: $${totalRevenue}`)
@@ -205,7 +222,13 @@ export async function processExpiredAuctions() {
           clearing_price: clearingResult.clearing_price,
           total_revenue: totalRevenue,
           successful_bidders: clearingResult.allocations.filter(a => a.allocated_quantity > 0).length,
-          rejected_bidders: clearingResult.allocations.filter(a => a.allocated_quantity === 0).length
+          rejected_bidders: clearingResult.allocations.filter(a => a.allocated_quantity === 0).length,
+          notifications: notificationResults ? {
+            sent: notificationResults.success,
+            bidder_notifications: notificationResults.bidder_notifications_sent,
+            company_notifications: notificationResults.company_notifications_sent,
+            errors: notificationResults.errors
+          } : null
         })
 
       } catch (error) {

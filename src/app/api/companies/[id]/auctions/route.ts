@@ -124,6 +124,7 @@ export async function POST(
       min_price: body.min_price,
       decreasing_minutes: body.decreasing_minutes || 0,
       duration_hours: body.duration_hours,
+      duration_minutes: body.duration_minutes || 0,
       invited_members: body.invited_members || [],
       wire_account_name: body.wire_account_name || '',
       wire_account_number: body.wire_account_number || '',

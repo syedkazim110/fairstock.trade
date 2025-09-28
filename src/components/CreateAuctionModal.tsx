@@ -25,6 +25,7 @@ interface AuctionFormData {
   minPrice: number
   decreasingMinutes: number
   durationHours: number
+  durationMinutes: number
   auctionMode: 'traditional' | 'modified_dutch'
   bidCollectionHours: number
   invitedMembers: string[]
@@ -47,6 +48,7 @@ const initialFormData: AuctionFormData = {
   minPrice: 0,
   decreasingMinutes: 15,
   durationHours: 24,
+  durationMinutes: 0,
   auctionMode: 'modified_dutch',
   bidCollectionHours: 24,
   invitedMembers: [],
@@ -155,17 +157,24 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
   }
 
   const calculatePricePreview = () => {
-    if (!formData.maxPrice || !formData.minPrice || !formData.durationHours || !formData.decreasingMinutes) {
+    const totalMinutes = (formData.durationHours * 60) + formData.durationMinutes
+    
+    if (!formData.maxPrice || !formData.minPrice || totalMinutes === 0 || !formData.decreasingMinutes) {
       return null
     }
 
-    const totalSteps = Math.floor((formData.durationHours * 60) / formData.decreasingMinutes)
+    const totalSteps = Math.floor(totalMinutes / formData.decreasingMinutes)
     const stepSize = (formData.maxPrice - formData.minPrice) / totalSteps
 
     return {
       totalSteps,
       stepSize: stepSize.toFixed(2),
-      totalDecreases: totalSteps
+      totalDecreases: totalSteps,
+      totalDurationText: formData.durationHours > 0 && formData.durationMinutes > 0 
+        ? `${formData.durationHours}h ${formData.durationMinutes}m`
+        : formData.durationHours > 0 
+        ? `${formData.durationHours} hours`
+        : `${formData.durationMinutes} minutes`
     }
   }
 
@@ -177,26 +186,27 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          title: formData.title,
-          description: formData.description,
-          shares_count: formData.sharesCount,
-          max_price: formData.maxPrice,
-          min_price: formData.minPrice,
-          decreasing_minutes: formData.decreasingMinutes,
-          duration_hours: formData.durationHours,
-          auction_mode: formData.auctionMode,
-          bid_collection_hours: formData.bidCollectionHours,
-          invited_members: formData.invitedMembers,
-          wire_account_name: formData.wireAccountName,
-          wire_account_number: formData.wireAccountNumber,
-          wire_routing_number: formData.wireRoutingNumber,
-          wire_bank_name: formData.wireBankName,
-          wire_bank_address: formData.wireBankAddress,
-          articles_document_id: formData.articlesDocumentId || null,
-          marketing_compliance_accepted: formData.marketingComplianceAccepted,
-          accredited_investor_compliance_accepted: formData.accreditedInvestorComplianceAccepted,
-        }),
+          body: JSON.stringify({
+            title: formData.title,
+            description: formData.description,
+            shares_count: formData.sharesCount,
+            max_price: formData.maxPrice,
+            min_price: formData.minPrice,
+            decreasing_minutes: formData.decreasingMinutes,
+            duration_hours: formData.durationHours,
+            duration_minutes: formData.durationMinutes,
+            auction_mode: formData.auctionMode,
+            bid_collection_hours: formData.bidCollectionHours,
+            invited_members: formData.invitedMembers,
+            wire_account_name: formData.wireAccountName,
+            wire_account_number: formData.wireAccountNumber,
+            wire_routing_number: formData.wireRoutingNumber,
+            wire_bank_name: formData.wireBankName,
+            wire_bank_address: formData.wireBankAddress,
+            articles_document_id: formData.articlesDocumentId || null,
+            marketing_compliance_accepted: formData.marketingComplianceAccepted,
+            accredited_investor_compliance_accepted: formData.accreditedInvestorComplianceAccepted,
+          }),
       })
 
       if (!response.ok) {
@@ -221,9 +231,14 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
       case 2:
         return formData.companyId
       case 3:
+        // Check minimum duration requirement (at least 1 minute total)
+        const totalMinutes = (formData.durationHours * 60) + formData.durationMinutes
+        const durationValid = totalMinutes >= 1
+        
         // For traditional auctions, require decreasingMinutes; for modified dutch, it's not needed
         const priceDropValid = formData.auctionMode === 'modified_dutch' || (formData.auctionMode === 'traditional' && formData.decreasingMinutes > 0)
-        return formData.title && formData.sharesCount > 0 && formData.maxPrice > 0 && formData.minPrice > 0 && formData.maxPrice > formData.minPrice && formData.durationHours > 0 && priceDropValid
+        
+        return formData.title && formData.sharesCount > 0 && formData.maxPrice > 0 && formData.minPrice > 0 && formData.maxPrice > formData.minPrice && durationValid && priceDropValid
       case 4:
         return formData.wireAccountName && formData.wireAccountNumber && formData.wireRoutingNumber && formData.wireBankName && formData.accreditedInvestorComplianceAccepted
       case 5:
@@ -412,7 +427,7 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
                 </div>
               </div>
 
-              <div className={`grid gap-4 mb-6 ${formData.auctionMode === 'modified_dutch' ? 'grid-cols-1 md:grid-cols-3' : 'grid-cols-2 md:grid-cols-4'}`}>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Maximum Price ($)</label>
                   <input
@@ -437,28 +452,46 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
                 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    {formData.auctionMode === 'modified_dutch' ? 'Bid Collection Period (hours)' : 'Duration (hours)'}
+                    {formData.auctionMode === 'modified_dutch' ? 'Duration (hours)' : 'Duration (hours)'}
                   </label>
                   <input
                     type="number"
+                    min="0"
                     value={formData.durationHours || ''}
                     onChange={(e) => updateFormData({ durationHours: parseInt(e.target.value) || 0 })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
                 
-                {formData.auctionMode === 'traditional' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    {formData.auctionMode === 'modified_dutch' ? 'Duration (minutes)' : 'Duration (minutes)'}
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="59"
+                    value={formData.durationMinutes || ''}
+                    onChange={(e) => updateFormData({ durationMinutes: parseInt(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {formData.auctionMode === 'traditional' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Price Drop Interval (min)</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Price Drop Interval (minutes)</label>
                     <input
                       type="number"
+                      min="1"
                       value={formData.decreasingMinutes || ''}
                       onChange={(e) => updateFormData({ decreasingMinutes: parseInt(e.target.value) || 0 })}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
-                )}
-              </div>
+                </div>
+              )}
 
               {formData.auctionMode === 'traditional' && calculatePricePreview() && (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
@@ -467,7 +500,7 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
                     Price will decrease by <strong>${calculatePricePreview()?.stepSize}</strong> every <strong>{formData.decreasingMinutes} minutes</strong>
                   </p>
                   <p className="text-sm text-blue-800">
-                    Total of <strong>{calculatePricePreview()?.totalSteps} price decreases</strong> over {formData.durationHours} hours
+                    Total of <strong>{calculatePricePreview()?.totalSteps} price decreases</strong> over <strong>{calculatePricePreview()?.totalDurationText}</strong>
                   </p>
                 </div>
               )}
@@ -618,7 +651,14 @@ export default function CreateAuctionModal({ companies, onClose, onSuccess, pres
                     <span className="text-sm text-gray-500">
                       {formData.auctionMode === 'modified_dutch' ? 'Bid Collection Period:' : 'Duration:'}
                     </span>
-                    <p className="font-medium">{formData.durationHours} hours</p>
+                    <p className="font-medium">
+                      {formData.durationHours > 0 && formData.durationMinutes > 0 
+                        ? `${formData.durationHours}h ${formData.durationMinutes}m`
+                        : formData.durationHours > 0 
+                        ? `${formData.durationHours} hours`
+                        : `${formData.durationMinutes} minutes`
+                      }
+                    </p>
                   </div>
                   {formData.auctionMode === 'traditional' && (
                     <div>

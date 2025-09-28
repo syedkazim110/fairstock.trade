@@ -4,6 +4,7 @@ export interface DutchAuctionParams {
   maxPrice: number
   minPrice: number
   durationHours: number
+  durationMinutes?: number
   decreasingMinutes: number
   startTime: Date
 }
@@ -23,7 +24,10 @@ export interface PriceCalculationResult {
  * Calculate the current price of a Dutch auction
  */
 export function calculateCurrentPrice(params: DutchAuctionParams, currentTime: Date = new Date()): PriceCalculationResult {
-  const { maxPrice, minPrice, durationHours, decreasingMinutes, startTime } = params
+  const { maxPrice, minPrice, durationHours, durationMinutes = 0, decreasingMinutes, startTime } = params
+  
+  // Calculate total duration in minutes
+  const totalDurationMinutes = (durationHours * 60) + durationMinutes
   
   // Calculate elapsed time in minutes
   const elapsedMinutes = Math.floor((currentTime.getTime() - startTime.getTime()) / (1000 * 60))
@@ -33,9 +37,9 @@ export function calculateCurrentPrice(params: DutchAuctionParams, currentTime: D
     return {
       currentPrice: maxPrice,
       elapsedMinutes: 0,
-      totalSteps: Math.floor((durationHours * 60) / decreasingMinutes),
+      totalSteps: Math.floor(totalDurationMinutes / decreasingMinutes),
       currentStep: 0,
-      stepSize: (maxPrice - minPrice) / Math.floor((durationHours * 60) / decreasingMinutes),
+      stepSize: (maxPrice - minPrice) / Math.floor(totalDurationMinutes / decreasingMinutes),
       timeToNextDecrease: decreasingMinutes,
       isExpired: false,
       hasReachedMinimum: false
@@ -43,14 +47,13 @@ export function calculateCurrentPrice(params: DutchAuctionParams, currentTime: D
   }
   
   // Calculate total steps and step size
-  const totalSteps = Math.floor((durationHours * 60) / decreasingMinutes)
+  const totalSteps = Math.floor(totalDurationMinutes / decreasingMinutes)
   const stepSize = (maxPrice - minPrice) / totalSteps
   
   // Calculate current step
   const currentStep = Math.floor(elapsedMinutes / decreasingMinutes)
   
   // Check if auction has expired
-  const totalDurationMinutes = durationHours * 60
   const isExpired = elapsedMinutes >= totalDurationMinutes
   
   // Calculate current price
@@ -80,9 +83,10 @@ export function calculateCurrentPrice(params: DutchAuctionParams, currentTime: D
  * Get the price at a specific step
  */
 export function getPriceAtStep(params: DutchAuctionParams, step: number): number {
-  const { maxPrice, minPrice, durationHours, decreasingMinutes } = params
+  const { maxPrice, minPrice, durationHours, durationMinutes = 0, decreasingMinutes } = params
   
-  const totalSteps = Math.floor((durationHours * 60) / decreasingMinutes)
+  const totalDurationMinutes = (durationHours * 60) + durationMinutes
+  const totalSteps = Math.floor(totalDurationMinutes / decreasingMinutes)
   const stepSize = (maxPrice - minPrice) / totalSteps
   
   const price = maxPrice - (step * stepSize)
@@ -98,9 +102,10 @@ export function generatePriceSchedule(params: DutchAuctionParams): Array<{
   timeFromStart: number
   timestamp: Date
 }> {
-  const { durationHours, decreasingMinutes, startTime } = params
+  const { durationHours, durationMinutes = 0, decreasingMinutes, startTime } = params
   
-  const totalSteps = Math.floor((durationHours * 60) / decreasingMinutes)
+  const totalDurationMinutes = (durationHours * 60) + durationMinutes
+  const totalSteps = Math.floor(totalDurationMinutes / decreasingMinutes)
   const schedule = []
   
   for (let step = 0; step <= totalSteps; step++) {
@@ -143,9 +148,10 @@ export function shouldEndAuction(params: DutchAuctionParams, currentTime: Date =
  * Format time remaining in auction
  */
 export function formatTimeRemaining(params: DutchAuctionParams, currentTime: Date = new Date()): string {
-  const { durationHours, startTime } = params
+  const { durationHours, durationMinutes = 0, startTime } = params
   
-  const endTime = new Date(startTime.getTime() + (durationHours * 60 * 60 * 1000))
+  const totalDurationMinutes = (durationHours * 60) + durationMinutes
+  const endTime = new Date(startTime.getTime() + (totalDurationMinutes * 60 * 1000))
   const remainingMs = endTime.getTime() - currentTime.getTime()
   
   if (remainingMs <= 0) {
@@ -202,19 +208,18 @@ export function validateAuctionParams(params: Partial<DutchAuctionParams>): {
     errors.push('Maximum price must be greater than minimum price')
   }
   
-  if (!params.durationHours || params.durationHours <= 0) {
-    errors.push('Duration must be greater than 0 hours')
+  // Check total duration (hours + minutes) is at least 1 minute
+  const totalMinutes = (params.durationHours || 0) * 60 + (params.durationMinutes || 0)
+  if (totalMinutes < 1) {
+    errors.push('Total duration must be at least 1 minute')
   }
   
   if (!params.decreasingMinutes || params.decreasingMinutes <= 0) {
     errors.push('Price decrease interval must be greater than 0 minutes')
   }
   
-  if (params.durationHours && params.decreasingMinutes) {
-    const totalMinutes = params.durationHours * 60
-    if (params.decreasingMinutes >= totalMinutes) {
-      errors.push('Price decrease interval must be less than total auction duration')
-    }
+  if (totalMinutes > 0 && params.decreasingMinutes && params.decreasingMinutes >= totalMinutes) {
+    errors.push('Price decrease interval must be less than total auction duration')
   }
   
   return {

@@ -146,9 +146,9 @@ export async function GET(
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
-    // Fetch transactions
+    // Fetch transactions with auction context
     const { data: transactions, error: fetchError } = await supabase
-      .from('company_transactions')
+      .from('company_transactions_with_auction_context')
       .select(`
         id,
         transaction_type,
@@ -157,7 +157,16 @@ export async function GET(
         from_member_email,
         to_member_email,
         description,
-        created_at
+        enhanced_description,
+        created_at,
+        auction_id,
+        auction_title,
+        auction_clearing_price,
+        auction_completion_date,
+        auction_allocated_quantity,
+        auction_settlement_status,
+        auction_settlement_date,
+        transaction_source
       `)
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })

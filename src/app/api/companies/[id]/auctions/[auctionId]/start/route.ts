@@ -49,6 +49,9 @@ export async function POST(
     // Calculate start and end times
     const startTime = new Date()
     
+    // Calculate total duration in milliseconds (hours + minutes)
+    const totalDurationMs = (auction.duration_hours * 60 * 60 * 1000) + ((auction.duration_minutes || 0) * 60 * 1000)
+    
     // Handle different auction modes
     let updateData: any = {
       start_time: startTime.toISOString()
@@ -56,7 +59,7 @@ export async function POST(
     
     if (auction.auction_mode === 'modified_dutch') {
       // Modified Dutch auction: start bid collection period
-      const bidCollectionEndTime = new Date(startTime.getTime() + (auction.duration_hours * 60 * 60 * 1000))
+      const bidCollectionEndTime = new Date(startTime.getTime() + totalDurationMs)
       updateData = {
         ...updateData,
         status: 'collecting_bids',
@@ -65,7 +68,7 @@ export async function POST(
       }
     } else {
       // Traditional Dutch auction: start immediate price decreasing
-      const endTime = new Date(startTime.getTime() + (auction.duration_hours * 60 * 60 * 1000))
+      const endTime = new Date(startTime.getTime() + totalDurationMs)
       updateData = {
         ...updateData,
         status: 'active',
